@@ -1,37 +1,33 @@
 # 🧠 AETHERION — Backend Architecture
 
-## Day 1: System Bootstrap (MVP Foundation)
-
 ---
 
-## 🎯 Objective
+# 🏁 Current Status
 
-Boot a production-style multi-service backend where:
+**Day 1: System Bootstrap — ✅ Complete**
+**Day 2: Market Data Simulator — ✅ Complete**
 
-* Django connects to MySQL
-* FastAPI connects to MongoDB
-* Flask runs independently
-* Services communicate via REST
-* Each service runs on a separate port
-
-Day 1 goal: Everything runs without errors.
+AETHERION backend is now running a live async market engine with OHLC aggregation.
 
 ---
 
 # 🏗 System Architecture
 
-Django Core (Port 8000) → MySQL (3306)
+```
+Django Core (Port 8000)   → MySQL (3306)
 FastAPI Market (Port 8001) → MongoDB (27017)
 Flask Regime (Port 8002)
 
 FastAPI → Flask (REST Communication)
+```
 
-This establishes a real microservice-style backend separation.
+This establishes a microservice-style backend separation.
 
 ---
 
 # 📂 Project Structure
 
+```
 AETHERION_BACKEND/
 │
 ├── django_core/        # Django + MySQL (Control Tower)
@@ -41,6 +37,7 @@ AETHERION_BACKEND/
 ├── requirements.txt
 ├── .gitignore
 └── README.md
+```
 
 ---
 
@@ -48,19 +45,23 @@ AETHERION_BACKEND/
 
 ## 1️⃣ Create Virtual Environment
 
+```
 python -m venv venv
 venv\Scripts\activate
+```
 
 ## 2️⃣ Install Dependencies
 
+```
 pip install -r requirements.txt
+```
 
 ---
 
 # 📦 requirements.txt
 
+```
 Django
-Django REST framework
 djangorestframework
 fastapi
 uvicorn
@@ -69,33 +70,43 @@ mysqlclient
 motor
 python-dotenv
 requests
+loguru
+websockets
+```
 
 ---
 
 # 🗄 Database Configuration
 
-## MySQL
+## MySQL (Django Core)
 
 Create database:
 
+```
 CREATE DATABASE aetherion_core;
+```
 
-Apply Django migrations:
+Apply migrations:
 
+```
 cd django_core
 python manage.py migrate
-
-Django ORM manages schema automatically.
+```
 
 ---
 
-## MongoDB
+## MongoDB (FastAPI Market)
 
-MongoDB runs locally as a Windows service on:
+Runs locally as Windows service:
 
+```
 mongodb://localhost:27017
+```
 
-FastAPI connects using Motor (async MongoDB driver).
+Collections created dynamically:
+
+* `market_ticks`
+* `market_candles`
 
 ---
 
@@ -103,45 +114,171 @@ FastAPI connects using Motor (async MongoDB driver).
 
 ## Django Core (Port 8000)
 
+```
 cd django_core
 python manage.py runserver 8000
+```
 
 Health check:
-[http://127.0.0.1:8000/health/](http://127.0.0.1:8000/health/)
+
+```
+http://127.0.0.1:8000/health/
+```
 
 ---
 
 ## FastAPI Market (Port 8001)
 
+```
 cd fastapi_market
-uvicorn main:app --port 8001 --reload
+python -m uvicorn main:app --port 8001
+```
 
 Health check:
-[http://127.0.0.1:8001/health](http://127.0.0.1:8001/health)
+
+```
+http://127.0.0.1:8001/
+```
+
+Swagger docs:
+
+```
+http://127.0.0.1:8001/docs
+```
 
 ---
 
 ## Flask Regime (Port 8002)
 
+```
 cd flask_regime
 python app.py
+```
 
 Health check:
-[http://127.0.0.1:8002/health](http://127.0.0.1:8002/health)
+
+```
+http://127.0.0.1:8002/health
+```
 
 ---
 
-# 🔄 Inter-Service Communication Test
+# 🔄 Inter-Service Communication
 
-FastAPI calling Flask:
+FastAPI → Flask REST call:
 
-[http://127.0.0.1:8001/check-regime](http://127.0.0.1:8001/check-regime)
+```
+http://127.0.0.1:8001/check-regime
+```
 
 Expected response:
 
+```
 {"status":"flask_regime running"}
+```
 
-This confirms service-to-service REST communication.
+---
+
+# 📊 Day 2 — Market Data Simulator
+
+## 🎯 Objective
+
+Generate a live simulated market with:
+
+* Real-time tick generation
+* MongoDB persistence
+* WebSocket broadcasting
+* 10-second OHLC candle aggregation
+
+---
+
+## 🔁 Tick Engine
+
+* Random-walk price simulation
+* Volume simulation
+* 1-second tick interval
+* Logged using `loguru`
+
+Mongo Collection:
+
+```
+market_ticks
+```
+
+---
+
+## 🌐 WebSocket Endpoint
+
+```
+ws://127.0.0.1:8001/ws/market
+```
+
+Streams live ticks every second:
+
+```
+{
+  "price": 101.22,
+  "volume": 532,
+  "timestamp": 1771230xxx,
+  "_id": "..."
+}
+```
+
+---
+
+## 📈 Candle Aggregation (10-Second OHLC)
+
+Every 10 seconds computes:
+
+* Open
+* High
+* Low
+* Close
+* Aggregated Volume
+
+Stored in Mongo:
+
+```
+market_candles
+```
+
+---
+
+## 📡 REST Endpoints
+
+### Snapshot (Recent Ticks)
+
+```
+GET /api/market/snapshot
+```
+
+Returns latest stored ticks.
+
+---
+
+### Candle Data
+
+```
+GET /api/market/candles
+```
+
+Returns recent OHLC candles:
+
+```
+{
+  "candles": [
+    {
+      "open": 100.75,
+      "high": 102.28,
+      "low": 100.75,
+      "close": 102.28,
+      "volume": 2380,
+      "start_time": 1771230349,
+      "end_time": 1771230359
+    }
+  ]
+}
+```
 
 ---
 
@@ -156,35 +293,52 @@ This confirms service-to-service REST communication.
 
 ---
 
-# 🧠 What Day 1 Achieved
+# ✅ Day 2 Completion Checklist
 
-You now have:
-
-• Structured storage via MySQL (Django ORM)
-• Async unstructured storage via MongoDB (Motor)
-• Clean microservice separation
-• REST-based inter-service communication
-• Production-style backend foundation
-
-This is the base layer for:
-Market Intelligence → Regime Detection → Strategy Engine → Risk Layer
-
----
-
-# 🔜 Day 2 Roadmap (Preview)
-
-Day 2 will focus on:
-
-1. Environment variable management (.env integration across services)
-2. Internal API contracts between services
-3. Standardized response schemas
-4. Logging & structured error handling
-5. Base service configuration layer
-6. Preparing for deployment (Render / Railway fail-safe setup)
+✔ Random-walk price generator
+✔ Volume simulation
+✔ Tick persistence (MongoDB)
+✔ WebSocket real-time streaming
+✔ Proper JSON serialization handling
+✔ 10-second OHLC candle aggregation
+✔ Candle persistence
+✔ REST snapshot endpoint
+✔ REST candle endpoint
 
 ---
 
-# 🚀 Status
+# 🧠 What Has Been Achieved
 
-AETHERION Backend — Day 1: COMPLETE
-System Boot Success
+AETHERION now includes:
+
+• Structured storage (MySQL via Django ORM)
+• Async unstructured storage (MongoDB via Motor)
+• Real-time WebSocket market streaming
+• Tick-level data persistence
+• OHLC aggregation engine
+• Microservice REST communication
+• Production-style backend separation
+
+This forms the foundation for:
+
+Market Intelligence → Regime Detection → Strategy Engine → Risk Layer → Surveillance
+
+---
+
+# 🔜 Next Phase (Day 3 Preview)
+
+* Background market engine (single loop, multi-client broadcast)
+* Volatility metrics
+* Trend detection
+* Regime classification engine
+* Strategy signal scaffolding
+
+---
+
+# 🚀 Current Status
+
+AETHERION Backend
+Day 1: COMPLETE
+Day 2: COMPLETE
+
+Live market engine operational.

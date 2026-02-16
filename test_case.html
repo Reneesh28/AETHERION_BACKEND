@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebSocket Test</title>
+</head>
+<body>
+    <h2>Market Feed</h2>
+    <script>
+        let ws = new WebSocket("ws://127.0.0.1:8000/ws/market");
+
+        ws.onopen = () => console.log("Connected");
+        ws.onmessage = (event) => console.log("Tick:", event.data);
+        ws.onerror = (err) => console.error("Error:", err);
+        ws.onclose = () => console.log("Closed");
+    </script>
+</body>
+</html>
