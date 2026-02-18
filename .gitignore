@@ -23,3 +23,6 @@ db.sqlite3
 
 # Logs
 *.log
+
+#ENV FILE
+.env
