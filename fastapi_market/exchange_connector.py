@@ -17,44 +17,35 @@ import websockets
 from datetime import datetime, timezone
 from pymongo import MongoClient
 
-# CONFIGURATION
 SYMBOL = "btcusdt"
 DATA_MODE = "LIVE"  # LIVE | SIMULATION
-
 MONGO_URI = "mongodb://localhost:27017"
 DB_NAME = "aetherion"
 COLLECTION_NAME = "real_market_ticks"
 
 
-# LOGGER
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
-
 logger = logging.getLogger("exchange")
-
-
-# DATABASE CONNECTION
 mongo_client = MongoClient(MONGO_URI)
 db = mongo_client[DB_NAME]
 collection = db[COLLECTION_NAME]
 
 
-# STREAM STATUS STATE
 """
 @notice Tracks real-time ingestion health
 """
 stream_status = {
-    "mode": DATA_MODE,
-    "connected": False,
-    "last_tick_time": None,
-    "ticks_received": 0,
-    "last_price": None
+    "mode": DATA_MODE,          # Current data source mode
+    "connected": False,         # WebSocket connection state
+    "last_tick_time": None,     # Timestamp of most recent received trade
+    "ticks_received": 0,        # Total number of trades received since start
+    "last_price": None          # Most recent traded price
 }
 
 
-# LIVE STREAM FUNCTION
 async def start_live_stream():
     """
     @notice Starts real-time Binance trade ingestion
@@ -62,15 +53,16 @@ async def start_live_stream():
     """
 
     url = f"wss://stream.binance.com:9443/ws/{SYMBOL}@trade"
-
     queue = asyncio.Queue()
+
     counter = 0
 
     async def mongo_writer():
         """
-        @notice Background MongoDB writer
+        @notice Background MongoDB batch writer
         """
-        buffer = []
+        buffer = []  # Temporary storage for batch inserts
+
         while True:
             tick = await queue.get()
             buffer.append(tick)
@@ -95,18 +87,17 @@ async def start_live_stream():
                 receive_time = int(datetime.now(timezone.utc).timestamp() * 1000)
 
                 normalized = {
-                    "symbol": msg["s"],
-                    "price": float(msg["p"]),
-                    "quantity": float(msg["q"]),
-                    "event_time": msg["E"],
-                    "trade_time": msg["T"],
-                    "receive_time": receive_time,
-                    "latency_ms": max(receive_time - msg["T"], 0),
+                    "symbol": msg["s"],            # Trading pair
+                    "price": float(msg["p"]),      # Trade price
+                    "quantity": float(msg["q"]),   # Trade size
+                    "event_time": msg["E"],        # Binance event time
+                    "trade_time": msg["T"],        # Actual trade execution time
+                    "receive_time": receive_time,  # Time received by server
+                    "latency_ms": max(receive_time - msg["T"], 0),  # Network latency
                 }
 
                 counter += 1
 
-                # Update health state
                 stream_status["ticks_received"] = counter
                 stream_status["last_tick_time"] = receive_time
                 stream_status["last_price"] = normalized["price"]
