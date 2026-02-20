@@ -13,7 +13,7 @@ from fastapi_market.schemas import (
 )
 from fastapi_market.database import (
     trade_collection,
-    order_book_collection
+    crypto_orderbook_collection   # ✅ Updated
 )
 
 # LOGGING
@@ -48,7 +48,9 @@ class CryptoConnector(BaseMarketConnector):
         self.heartbeat_timeout = 20
         self.reconnect_delay = 5
 
+    # ==============================
     # TRADE STREAM
+    # ==============================
     async def start_trade_stream(self):
 
         queue = asyncio.Queue()
@@ -68,7 +70,7 @@ class CryptoConnector(BaseMarketConnector):
 
         while True:
             try:
-                logger.info("🔌 Connecting to Binance trade stream...")
+                logger.info(f"🔌 Connecting to Binance trade stream for {self.symbol}...")
 
                 async with websockets.connect(
                     self.trade_url,
@@ -89,12 +91,14 @@ class CryptoConnector(BaseMarketConnector):
                 )
                 await asyncio.sleep(self.reconnect_delay)
 
+    # ==============================
     # ORDERBOOK STREAM
+    # ==============================
     async def start_orderbook_stream(self):
 
         while True:
             try:
-                logger.info("🔌 Connecting to Binance orderbook stream...")
+                logger.info(f"🔌 Connecting to Binance orderbook stream for {self.symbol}...")
 
                 async with websockets.connect(self.depth_url) as ws:
 
@@ -106,7 +110,6 @@ class CryptoConnector(BaseMarketConnector):
 
                         raw = json.loads(message)
 
-                        # Basic structure validation
                         if "b" not in raw or "a" not in raw:
                             continue
 
@@ -114,9 +117,9 @@ class CryptoConnector(BaseMarketConnector):
 
                         normalized = self.normalize_orderbook(raw)
 
-                        await order_book_collection.insert_one(normalized)
+                        # ✅ Write to crypto-specific collection
+                        await crypto_orderbook_collection.insert_one(normalized)
 
-                        # Heartbeat protection
                         if (
                             time.time() - last_message_time
                             > self.heartbeat_timeout
@@ -133,7 +136,9 @@ class CryptoConnector(BaseMarketConnector):
                 )
                 await asyncio.sleep(self.reconnect_delay)
 
+    # ==============================
     # NORMALIZATION
+    # ==============================
     def normalize_trade(self, raw_data):
 
         receive_time = int(

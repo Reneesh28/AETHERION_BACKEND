@@ -9,18 +9,20 @@ from dotenv import load_dotenv
 
 from fastapi_market.connectors.base_connector import BaseMarketConnector
 from fastapi_market.schemas import unified_trade_schema
-from fastapi_market.database import trade_collection
-
+from fastapi_market.database import (
+    trade_collection,
+    us_orderbook_collection
+)
 
 load_dotenv()
 
-logger = logging.getLogger("us_stock_connector")
+logger = logging.getLogger("us_base_connector")
 
 
-class USStockConnector(BaseMarketConnector):
+class USBaseConnector(BaseMarketConnector):
     """
-    Alpaca US Stock Trade Stream Connector
-    Supports symbol format: NASDAQ:AAPL
+    Base connector for US exchanges (NASDAQ, NYSE)
+    Handles Alpaca WebSocket trade stream.
     """
 
     def __init__(self, symbol: str):
@@ -38,7 +40,9 @@ class USStockConnector(BaseMarketConnector):
 
         while True:
             try:
-                logger.info("🔌 Connecting to Alpaca trade stream...")
+                logger.info(
+                    f"🔌 Connecting to Alpaca trade stream for {self.symbol}..."
+                )
 
                 async with websockets.connect(self.ws_url) as ws:
 
@@ -50,10 +54,12 @@ class USStockConnector(BaseMarketConnector):
                     }
 
                     await ws.send(json.dumps(auth_msg))
-                    await ws.recv()  # connected
-                    await ws.recv()  # authenticated
+                    await ws.recv()
+                    await ws.recv()
 
-                    logger.info("✅ Authenticated with Alpaca")
+                    logger.info(
+                        f"✅ Authenticated for {self.exchange}:{self.ticker}"
+                    )
 
                     # Subscribe to trades
                     sub_msg = {
@@ -62,7 +68,9 @@ class USStockConnector(BaseMarketConnector):
                     }
 
                     await ws.send(json.dumps(sub_msg))
-                    logger.info(f"📡 Subscribed to {self.ticker}")
+                    logger.info(
+                        f"📡 Subscribed to {self.ticker}"
+                    )
 
                     async for message in ws:
                         data = json.loads(message)
@@ -73,12 +81,17 @@ class USStockConnector(BaseMarketConnector):
                                 await trade_collection.insert_one(normalized)
 
             except Exception as e:
-                logger.error(f"❌ Alpaca stream error: {e}")
-                logger.info(f"🔄 Reconnecting in {self.reconnect_delay}s...")
+                logger.error(f"❌ US trade stream error: {e}")
+                logger.info(
+                    f"🔄 Reconnecting in {self.reconnect_delay}s..."
+                )
                 await asyncio.sleep(self.reconnect_delay)
 
     async def start_orderbook_stream(self):
-        # Alpaca free tier does not support full depth
+        """
+        Alpaca free tier does not provide full orderbook depth.
+        Reserved for future paid integration.
+        """
         pass
 
     def normalize_trade(self, raw):
@@ -87,22 +100,24 @@ class USStockConnector(BaseMarketConnector):
             datetime.now(timezone.utc).timestamp() * 1000
         )
 
+        exchange_ts = int(
+            datetime.fromisoformat(
+                raw["t"].replace("Z", "+00:00")
+            ).timestamp() * 1000
+        )
+
         return unified_trade_schema(
             market_type="US_STOCK",
             symbol=f"{self.exchange}:{self.ticker}",
             price=float(raw["p"]),
             quantity=float(raw["s"]),
-            side="BUY",  # Aggressor side not provided in free feed
-            exchange_timestamp=int(
-                datetime.fromisoformat(raw["t"].replace("Z", "+00:00"))
-                .timestamp() * 1000
-            ),
+            side="BUY",  # Aggressor side not available
+            exchange_timestamp=exchange_ts,
             receive_timestamp=receive_time
         )
-    
+
     def normalize_orderbook(self, raw):
         """
-        Alpaca free tier does not provide full orderbook depth.
-        Placeholder to satisfy abstract base class.
+        Placeholder for future US orderbook support.
         """
         return None

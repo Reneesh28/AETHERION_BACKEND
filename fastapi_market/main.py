@@ -1,14 +1,9 @@
 """
 @title AETHERION Market Engine (FastAPI Service)
-@notice Market-agnostic ingestion engine
-@dev
-    - Connector Factory driven
-    - UTC timezone-aware timestamps
+@notice Multi-market ingestion engine
 """
-
 from dotenv import load_dotenv
 load_dotenv()
-
 
 from fastapi import FastAPI, WebSocket
 import asyncio
@@ -16,25 +11,30 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi_market.simulator import MarketSimulator
-from fastapi_market.service import save_tick, get_snapshot
+from fastapi_market.service import save_tick
 from fastapi_market.database import (
     candle_collection,
-    order_book_collection
+    trade_collection,
+    crypto_orderbook_collection,
+    us_orderbook_collection,
+    nse_orderbook_collection
 )
 
 from fastapi_market.config import MarketType
 from fastapi_market.connectors.connector_factory import get_connector
 
 
-# MARKET CONFIG
-# MARKET_TYPE = MarketType.CRYPTO
-# SYMBOL = "btcusdt"
-MARKET_TYPE = MarketType.US_STOCK
-SYMBOL = "NASDAQ:TSLA"
+# MULTI-MARKET CONFIG
+MARKETS = [
+    {"type": MarketType.CRYPTO, "symbol": "btcusdt"},
+    {"type": MarketType.US_STOCK, "symbol": "NASDAQ:TSLA"},
+    {"type": MarketType.US_STOCK, "symbol": "NYSE:IBM"},
+]
+
 DATA_MODE = "LIVE"  # LIVE | SIMULATION
 
 
-# LIFESPAN
+# LIFESPAN - START ALL CONNECTORS
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -42,17 +42,23 @@ async def lifespan(app: FastAPI):
 
     if DATA_MODE == "LIVE":
 
-        connector = get_connector(MARKET_TYPE, SYMBOL)
+        for market in MARKETS:
 
-        trade_task = asyncio.create_task(
-            connector.start_trade_stream()
-        )
+            connector = get_connector(
+                market["type"],
+                market["symbol"]
+            )
 
-        orderbook_task = asyncio.create_task(
-            connector.start_orderbook_stream()
-        )
+            trade_task = asyncio.create_task(
+                connector.start_trade_stream()
+            )
+            tasks.append(trade_task)
 
-        tasks.extend([trade_task, orderbook_task])
+            if hasattr(connector, "start_orderbook_stream"):
+                ob_task = asyncio.create_task(
+                    connector.start_orderbook_stream()
+                )
+                tasks.append(ob_task)
 
     yield
 
@@ -68,21 +74,75 @@ simulator = MarketSimulator()
 current_candle = None
 candle_start_time = None
 
-
 # HEALTH CHECK
 @app.get("/")
 def root():
-    return {"status": "AETHERION Market Engine Running"}
+    return {"status": "AETHERION Multi-Market Engine Running"}
+
+# ACTIVE MARKETS
+@app.get("/api/market/active")
+async def active_markets():
+    
+    return {"markets": [m["symbol"] for m in MARKETS]}
+
+# SNAPSHOT PER SYMBOL
+@app.get("/api/market/snapshot/{symbol}")
+async def market_snapshot(symbol: str):
+    latest = await trade_collection.find_one(
+        {"symbol": symbol},
+        sort=[("receive_timestamp", -1)]
+    )
+
+    if latest:
+        latest["_id"] = str(latest["_id"])
+
+    return {"data": latest}
 
 
-# SNAPSHOT
-@app.get("/api/market/snapshot")
-async def market_snapshot():
-    data = await get_snapshot()
-    return {"data": data}
+# LAST 50 TRADES PER SYMBOL
+@app.get("/api/market/trades/{symbol}")
+async def get_trades(symbol: str):
+
+    cursor = trade_collection.find(
+        {"symbol": symbol}
+    ).sort("receive_timestamp", -1).limit(50)
+
+    data = await cursor.to_list(length=50)
+
+    for item in data:
+        item["_id"] = str(item["_id"])
+
+    return {"trades": data}
 
 
-# CANDLES
+# ORDERBOOK PER SYMBOL
+@app.get("/api/market/orderbook/{symbol}")
+async def get_orderbook(symbol: str):
+
+    if symbol.islower():  # Crypto
+        collection = crypto_orderbook_collection
+
+    elif symbol.startswith("NASDAQ:") or symbol.startswith("NYSE:"):
+        collection = us_orderbook_collection
+
+    elif symbol.startswith("NSE:"):
+        collection = nse_orderbook_collection
+
+    else:
+        return {"error": "Unsupported symbol"}
+
+    latest = await collection.find_one(
+        {"symbol": symbol.upper()},
+        sort=[("receive_timestamp", -1)]
+    )
+
+    if latest:
+        latest["_id"] = str(latest["_id"])
+
+    return {"orderbook": latest}
+
+
+# CANDLES (SIMULATION MODE)
 @app.get("/api/market/candles")
 async def get_candles():
 
@@ -144,19 +204,4 @@ async def market_websocket(websocket: WebSocket):
             current_candle["volume"] += tick["volume"]
 
         await websocket.send_json(tick)
-
         await asyncio.sleep(1)
-
-
-# ORDERBOOK ENDPOINT
-@app.get("/api/market/orderbook")
-async def get_latest_orderbook():
-
-    latest = await order_book_collection.find_one(
-        sort=[("receive_timestamp", -1)]
-    )
-
-    if latest:
-        latest["_id"] = str(latest["_id"])
-
-    return {"orderbook": latest}

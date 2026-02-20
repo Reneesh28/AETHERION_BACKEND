@@ -6,7 +6,13 @@ DB_NAME = "aetherion"
 client = AsyncIOMotorClient(MONGO_URI)
 db = client[DB_NAME]
 
-# Collections
+# Unified trade collection
 trade_collection = db["real_market_ticks"]
-order_book_collection = db["order_book_snapshots"]
+
+# Separate orderbook collections
+crypto_orderbook_collection = db["crypto_orderbooks"]
+us_orderbook_collection = db["us_orderbooks"]
+nse_orderbook_collection = db["nse_orderbooks"]
+
+# Candles
 candle_collection = db["candles"]
