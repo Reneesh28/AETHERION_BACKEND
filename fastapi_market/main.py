@@ -2,7 +2,6 @@
 @title AETHERION Market Engine (FastAPI Service)
 @notice Multi-market ingestion engine with stream monitoring
 """
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -10,7 +9,6 @@ from fastapi import FastAPI, WebSocket
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-
 from fastapi_market.simulator import MarketSimulator
 from fastapi_market.service import save_tick
 from fastapi_market.database import (
@@ -25,25 +23,24 @@ from fastapi_market.connectors.connector_factory import get_connector
 from fastapi_market.connectors.us_market_connector import USMarketConnector
 from fastapi_market.connectors.nse_market_connector import NSEMarketConnector
 from fastapi_market.stream_status import stream_status
+from fastapi_market.feature_engine import FeatureEngine
 
+feature_engine = FeatureEngine()
 CRYPTO_MARKETS = [{"type": MarketType.CRYPTO, "symbol": "btcusdt"}]
 US_SYMBOLS = ["NASDAQ:TSLA", "NYSE:IBM"]
 NSE_TOKENS = ["2885", "11536", "15259", "11915"]
 DATA_MODE = "LIVE"
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
     tasks = []
 
-    # 🔥 CAPTURE MAIN EVENT LOOP (CRITICAL FIX)
     app.state.loop = asyncio.get_running_loop()
 
     if DATA_MODE == "LIVE":
 
         for market in CRYPTO_MARKETS:
-
             connector = get_connector(
                 market["type"],
                 market["symbol"]
@@ -57,21 +54,18 @@ async def lifespan(app: FastAPI):
                 tasks.append(
                     asyncio.create_task(connector.start_orderbook_stream())
                 )
-
         us_connector = USMarketConnector(US_SYMBOLS)
-
         tasks.append(
             asyncio.create_task(us_connector.start_trade_stream())
         )
-
         print("🚀 Starting NSE Connector...")
-
-        nse_connector = NSEMarketConnector(
-            NSE_TOKENS
-        )
-
+        nse_connector = NSEMarketConnector(NSE_TOKENS)
         tasks.append(
             asyncio.create_task(nse_connector.start_trade_stream())
+        )
+        print("🧠 Starting Feature Consumer Loop...")
+        tasks.append(
+            asyncio.create_task(feature_engine.start_feature_consumer())
         )
 
     yield
@@ -81,23 +75,18 @@ async def lifespan(app: FastAPI):
 
     await asyncio.gather(*tasks, return_exceptions=True)
 
-
 app = FastAPI(lifespan=lifespan)
-
 simulator = MarketSimulator()
 current_candle = None
 candle_start_time = None
-
 
 @app.get("/")
 def root():
     return {"status": "AETHERION Multi-Market Engine Running"}
 
-
 @app.get("/api/market/status")
 async def market_status():
     return stream_status
-
 
 @app.get("/api/market/active")
 async def active_markets():
@@ -106,7 +95,6 @@ async def active_markets():
         "us": US_SYMBOLS,
         "nse": NSE_TOKENS
     }
-
 
 @app.get("/api/market/snapshot/{market}")
 async def market_snapshot(market: str):
@@ -131,7 +119,6 @@ async def market_snapshot(market: str):
         latest["_id"] = str(latest["_id"])
 
     return {"data": latest}
-
 
 @app.get("/api/market/trades/{market}")
 async def get_trades(market: str):
@@ -158,7 +145,6 @@ async def get_trades(market: str):
 
     return {"trades": data}
 
-
 @app.get("/api/market/orderbook/{market}")
 async def get_orderbook(market: str):
 
@@ -182,6 +168,34 @@ async def get_orderbook(market: str):
 
     return {"orderbook": latest}
 
+@app.get("/api/market/features/{market}")
+async def get_features(market: str, limit: int = 50):
+
+    market = market.lower()
+
+    if market == "crypto":
+        market_type = "CRYPTO"
+    elif market == "us":
+        market_type = "US_STOCK"
+    elif market == "nse":
+        market_type = "NSE"
+    else:
+        return {"error": "Invalid market type"}
+
+    cursor = feature_engine.collection.find(
+        {"market": market_type}
+    ).sort("created_at", -1).limit(limit)
+
+    data = await cursor.to_list(length=limit)
+
+    for item in data:
+        item["_id"] = str(item["_id"])
+
+    return {
+        "market": market_type,
+        "count": len(data),
+        "features": data
+    }
 
 @app.get("/api/market/candles")
 async def get_candles():
@@ -193,7 +207,6 @@ async def get_candles():
         item["_id"] = str(item["_id"])
 
     return {"candles": data}
-
 
 @app.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):

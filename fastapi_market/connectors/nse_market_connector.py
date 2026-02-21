@@ -37,10 +37,6 @@ class NSEMarketConnector(BaseMarketConnector):
         self.tokens = tokens
         self.api = None
 
-    # =====================================================
-    # LOGIN
-    # =====================================================
-
     def _login(self):
         self.api = SmartConnect(api_key=os.getenv("NSE_API_KEY"))
 
@@ -57,10 +53,6 @@ class NSEMarketConnector(BaseMarketConnector):
 
         print("✅ NSE REST Login Successful")
 
-    # =====================================================
-    # SAFE REST CALL (RUN IN THREADPOOL)
-    # =====================================================
-
     async def _fetch_ltp(self, token):
         loop = asyncio.get_running_loop()
 
@@ -72,10 +64,6 @@ class NSEMarketConnector(BaseMarketConnector):
             )
 
         return await loop.run_in_executor(None, blocking_call)
-
-    # =====================================================
-    # NORMALIZATION
-    # =====================================================
 
     def normalize_trade(self, token, raw):
         symbol = self.TOKEN_MAP.get(token, token)
@@ -111,10 +99,6 @@ class NSEMarketConnector(BaseMarketConnector):
             exchange_timestamp=int(time.time()),
             receive_timestamp=int(time.time())
         )
-
-    # =====================================================
-    # MAIN STABLE POLLING LOOP
-    # =====================================================
 
     async def start_trade_stream(self):
 
@@ -174,4 +158,4 @@ class NSEMarketConnector(BaseMarketConnector):
                 backoff = min(backoff * 2, self.MAX_BACKOFF)
 
     async def start_orderbook_stream(self):
-        pass  # Not required for REST version
+        pass
