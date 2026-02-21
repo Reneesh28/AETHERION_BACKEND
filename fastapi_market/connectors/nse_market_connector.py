@@ -1,173 +1,177 @@
 import os
-import json
-import pyotp
-import threading
+import asyncio
 import time
+import pyotp
 from datetime import datetime, timezone
 from SmartApi import SmartConnect
-from SmartApi.smartWebSocketV2 import SmartWebSocketV2
-from fastapi_market.database import trade_collection, nse_orderbook_collection
+
+from fastapi_market.connectors.base_connector import BaseMarketConnector
+from fastapi_market.schemas import (
+    unified_trade_schema,
+    unified_orderbook_schema
+)
+from fastapi_market.database import (
+    trade_collection,
+    nse_orderbook_collection
+)
 from fastapi_market.stream_status import stream_status
 
 
-class NSEMarketConnector:
+class NSEMarketConnector(BaseMarketConnector):
 
     TOKEN_MAP = {
-        "2885": "RELIANCE",
-        "11536": "TCS",
-        "15259": "RPOWER",
-        "11915": "YESBANK"
+        "2885": "RELIANCE-EQ",
+        "11536": "TCS-EQ",
+        "15259": "RPOWER-EQ",
+        "11915": "YESBANK-EQ"
     }
 
-    WATCHDOG_TIMEOUT = 30  # seconds
-    WATCHDOG_CHECK_INTERVAL = 10  # seconds
+    # 🔥 Stable production configuration
+    PER_TOKEN_DELAY = 1          # delay between each token call
+    CYCLE_INTERVAL = 3           # delay after full token cycle
+    INITIAL_BACKOFF = 3          # seconds
+    MAX_BACKOFF = 60             # cap exponential backoff
 
     def __init__(self, tokens):
+        super().__init__("NSE")
         self.tokens = tokens
         self.api = None
-        self.feed_token = None
-        self.ws = None
-        self.is_reconnecting = False
-        self.last_tick_time = None
 
-    async def connect(self):
-        print("🚀 NSE connect() triggered")
-        self._initialize_connection()
-        self._start_watchdog()
+    # =====================================================
+    # LOGIN
+    # =====================================================
 
-    def _initialize_connection(self):
-        try:
-            self.api = SmartConnect(api_key=os.getenv("NSE_API_KEY"))
+    def _login(self):
+        self.api = SmartConnect(api_key=os.getenv("NSE_API_KEY"))
 
-            totp = pyotp.TOTP(os.getenv("NSE_TOTP_SECRET")).now()
+        totp = pyotp.TOTP(os.getenv("NSE_TOTP_SECRET")).now()
 
-            session = self.api.generateSession(
-                os.getenv("NSE_CLIENT_ID"),
-                os.getenv("NSE_MPIN"),
-                totp
-            )
-
-            if not session.get("status"):
-                print("❌ NSE Login Failed:", session)
-                return
-
-            print("✅ NSE Login Successful")
-
-            self.feed_token = self.api.getfeedToken()
-
-            self.ws = SmartWebSocketV2(
-                os.getenv("NSE_CLIENT_ID"),
-                os.getenv("NSE_API_KEY"),
-                self.feed_token
-            )
-
-            self.ws.on_open = self.on_open
-            self.ws.on_data = self.on_message
-            self.ws.on_error = self.on_error
-            self.ws.on_close = self.on_close
-
-            threading.Thread(target=self.ws.connect, daemon=True).start()
-
-        except Exception as e:
-            print("❌ NSE Init Error:", e)
-            self._schedule_reconnect()
-
-    def on_open(self, ws):
-        print("📡 NSE WebSocket Opened")
-
-        self.ws.subscribe(
-            correlation_id="nse_stream",
-            mode=1,
-            token_list=[
-                {"exchangeType": 1, "tokens": self.tokens}
-            ]
+        session = self.api.generateSession(
+            os.getenv("NSE_CLIENT_ID"),
+            os.getenv("NSE_MPIN"),
+            totp
         )
 
-        print("📡 NSE Subscribed to:", self.tokens)
+        if not session.get("status"):
+            raise Exception(f"NSE Login Failed: {session}")
+
+        print("✅ NSE REST Login Successful")
+
+    # =====================================================
+    # SAFE REST CALL (RUN IN THREADPOOL)
+    # =====================================================
+
+    async def _fetch_ltp(self, token):
+        loop = asyncio.get_running_loop()
+
+        def blocking_call():
+            return self.api.ltpData(
+                exchange="NSE",
+                tradingsymbol=self.TOKEN_MAP.get(token, token),
+                symboltoken=token
+            )
+
+        return await loop.run_in_executor(None, blocking_call)
+
+    # =====================================================
+    # NORMALIZATION
+    # =====================================================
+
+    def normalize_trade(self, token, raw):
+        symbol = self.TOKEN_MAP.get(token, token)
+        data = raw.get("data", {})
+
+        price = float(data.get("ltp", 0))
+
+        return unified_trade_schema(
+            market_type="NSE",
+            symbol=symbol,
+            price=price,
+            quantity=0,
+            side="UNKNOWN",
+            exchange_timestamp=int(time.time()),
+            receive_timestamp=int(time.time())
+        )
+
+    def normalize_orderbook(self, token, raw):
+        symbol = self.TOKEN_MAP.get(token, token)
+        data = raw.get("data", {})
+
+        best_bid = float(data.get("bid", data.get("bestBid", data.get("ltp", 0))))
+        best_ask = float(data.get("ask", data.get("bestAsk", data.get("ltp", 0))))
+
+        bids = [[best_bid, 1]] if best_bid > 0 else []
+        asks = [[best_ask, 1]] if best_ask > 0 else []
+
+        return unified_orderbook_schema(
+            market_type="NSE",
+            symbol=symbol,
+            bids=bids,
+            asks=asks,
+            exchange_timestamp=int(time.time()),
+            receive_timestamp=int(time.time())
+        )
+
+    # =====================================================
+    # MAIN STABLE POLLING LOOP
+    # =====================================================
+
+    async def start_trade_stream(self):
+
+        print("🚀 Starting NSE REST Polling Connector (Stable Mode)...")
+
+        self._login()
 
         stream_status["NSE"] = {
             "status": "LIVE",
             "last_update": datetime.now(timezone.utc)
         }
 
-        self.is_reconnecting = False
-        self.last_tick_time = datetime.now(timezone.utc)
+        backoff = self.INITIAL_BACKOFF
 
-    def on_message(self, ws, message):
-        try:
-            self.last_tick_time = datetime.now(timezone.utc)
+        while True:
+            try:
+                # 🔥 Sequential polling
+                for token in self.tokens:
 
-            data = json.loads(message)
-            token = str(data.get("token"))
-            symbol_name = self.TOKEN_MAP.get(token, token)
+                    raw = await self._fetch_ltp(token)
 
-            trade_doc = {
-                "symbol": symbol_name,
-                "price": float(data.get("last_traded_price", 0)),
-                "quantity": float(data.get("last_traded_quantity", 0)),
-                "market_type": "NSE",
-                "receive_timestamp": datetime.now(timezone.utc)
-            }
+                    if not raw or "data" not in raw:
+                        continue
 
-            trade_collection.insert_one(trade_doc)
+                    trade_doc = self.normalize_trade(token, raw)
+                    orderbook_doc = self.normalize_orderbook(token, raw)
 
-            orderbook_doc = {
-                "symbol": symbol_name,
-                "bids": data.get("best_5_buy_data", []),
-                "asks": data.get("best_5_sell_data", []),
-                "receive_timestamp": datetime.now(timezone.utc)
-            }
+                    if trade_doc["price"] > 0:
+                        await trade_collection.insert_one(trade_doc)
+                        await nse_orderbook_collection.insert_one(orderbook_doc)
 
-            nse_orderbook_collection.insert_one(orderbook_doc)
+                        stream_status["NSE"] = {
+                            "status": "LIVE",
+                            "last_price": trade_doc["price"],
+                            "last_update": datetime.now(timezone.utc)
+                        }
 
-            stream_status["NSE"] = {
-                "status": "LIVE",
-                "last_price": trade_doc["price"],
-                "last_update": self.last_tick_time
-            }
+                    # ✅ Per-token throttling
+                    await asyncio.sleep(self.PER_TOKEN_DELAY)
 
-        except Exception as e:
-            print("❌ NSE Processing Error:", e)
+                # ✅ Reset backoff after successful cycle
+                backoff = self.INITIAL_BACKOFF
 
-    def _start_watchdog(self):
-        def watchdog():
-            while True:
-                time.sleep(self.WATCHDOG_CHECK_INTERVAL)
+                # ✅ Global cycle interval
+                await asyncio.sleep(self.CYCLE_INTERVAL)
 
-                if self.last_tick_time is None:
-                    continue
+            except Exception as e:
+                print("❌ NSE REST Polling Error:", e)
 
-                elapsed = (datetime.now(timezone.utc) - self.last_tick_time).total_seconds()
+                stream_status["NSE"] = {
+                    "status": "ERROR",
+                    "last_update": datetime.now(timezone.utc)
+                }
 
-                if elapsed > self.WATCHDOG_TIMEOUT:
-                    print("⚠️ NSE Feed Stalled. Triggering reconnect...")
-                    self._schedule_reconnect()
+                # ✅ Exponential backoff
+                await asyncio.sleep(backoff)
+                backoff = min(backoff * 2, self.MAX_BACKOFF)
 
-        threading.Thread(target=watchdog, daemon=True).start()
-
-    def on_error(self, ws, error):
-        print("❌ NSE WebSocket Error:", error)
-        self._schedule_reconnect()
-
-    def on_close(self, ws):
-        print("🔴 NSE WebSocket Closed")
-        self._schedule_reconnect()
-
-    def _schedule_reconnect(self):
-        if self.is_reconnecting:
-            return
-
-        self.is_reconnecting = True
-
-        stream_status["NSE"] = {
-            "status": "DISCONNECTED",
-            "last_update": datetime.now(timezone.utc)
-        }
-
-        print("♻️ Reconnecting to NSE in 5 seconds...")
-
-        def reconnect():
-            time.sleep(5)
-            self._initialize_connection()
-
-        threading.Thread(target=reconnect, daemon=True).start()
+    async def start_orderbook_stream(self):
+        pass  # Not required for REST version

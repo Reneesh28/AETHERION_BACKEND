@@ -2,6 +2,7 @@
 @title AETHERION Market Engine (FastAPI Service)
 @notice Multi-market ingestion engine with stream monitoring
 """
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -25,20 +26,19 @@ from fastapi_market.connectors.us_market_connector import USMarketConnector
 from fastapi_market.connectors.nse_market_connector import NSEMarketConnector
 from fastapi_market.stream_status import stream_status
 
-CRYPTO_MARKETS = [
-    {"type": MarketType.CRYPTO, "symbol": "btcusdt"},
-]
-
+CRYPTO_MARKETS = [{"type": MarketType.CRYPTO, "symbol": "btcusdt"}]
 US_SYMBOLS = ["NASDAQ:TSLA", "NYSE:IBM"]
-
-NSE_TOKENS = ["2885", "11536", "15259", "11915"]  # RELIANCE, TCS, RPOWER, YESBANK
-
+NSE_TOKENS = ["2885", "11536", "15259", "11915"]
 DATA_MODE = "LIVE"
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
     tasks = []
+
+    # 🔥 CAPTURE MAIN EVENT LOOP (CRITICAL FIX)
+    app.state.loop = asyncio.get_running_loop()
 
     if DATA_MODE == "LIVE":
 
@@ -57,20 +57,25 @@ async def lifespan(app: FastAPI):
                 tasks.append(
                     asyncio.create_task(connector.start_orderbook_stream())
                 )
+
         us_connector = USMarketConnector(US_SYMBOLS)
 
         tasks.append(
             asyncio.create_task(us_connector.start_trade_stream())
         )
+
         print("🚀 Starting NSE Connector...")
 
-        nse_connector = NSEMarketConnector(NSE_TOKENS)
+        nse_connector = NSEMarketConnector(
+            NSE_TOKENS
+        )
 
         tasks.append(
-            asyncio.create_task(nse_connector.connect())
+            asyncio.create_task(nse_connector.start_trade_stream())
         )
 
     yield
+
     for task in tasks:
         task.cancel()
 
@@ -83,13 +88,16 @@ simulator = MarketSimulator()
 current_candle = None
 candle_start_time = None
 
+
 @app.get("/")
 def root():
     return {"status": "AETHERION Multi-Market Engine Running"}
 
+
 @app.get("/api/market/status")
 async def market_status():
     return stream_status
+
 
 @app.get("/api/market/active")
 async def active_markets():
@@ -98,6 +106,7 @@ async def active_markets():
         "us": US_SYMBOLS,
         "nse": NSE_TOKENS
     }
+
 
 @app.get("/api/market/snapshot/{market}")
 async def market_snapshot(market: str):
@@ -122,6 +131,7 @@ async def market_snapshot(market: str):
         latest["_id"] = str(latest["_id"])
 
     return {"data": latest}
+
 
 @app.get("/api/market/trades/{market}")
 async def get_trades(market: str):
@@ -148,6 +158,7 @@ async def get_trades(market: str):
 
     return {"trades": data}
 
+
 @app.get("/api/market/orderbook/{market}")
 async def get_orderbook(market: str):
 
@@ -171,6 +182,7 @@ async def get_orderbook(market: str):
 
     return {"orderbook": latest}
 
+
 @app.get("/api/market/candles")
 async def get_candles():
 
@@ -181,6 +193,7 @@ async def get_candles():
         item["_id"] = str(item["_id"])
 
     return {"candles": data}
+
 
 @app.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):
@@ -230,3 +243,4 @@ async def market_websocket(websocket: WebSocket):
             current_candle["volume"] += tick["volume"]
 
         await websocket.send_json(tick)
+        await asyncio.sleep(1)
