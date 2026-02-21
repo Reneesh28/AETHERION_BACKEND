@@ -1,7 +1,15 @@
+import requests
+import certifi
+
+requests.Session().verify = certifi.where()
+
 import os
 import asyncio
 import time
 import pyotp
+import certifi
+import requests
+
 from datetime import datetime, timezone
 from SmartApi import SmartConnect
 
@@ -26,11 +34,10 @@ class NSEMarketConnector(BaseMarketConnector):
         "11915": "YESBANK-EQ"
     }
 
-    # 🔥 Stable production configuration
-    PER_TOKEN_DELAY = 1          # delay between each token call
-    CYCLE_INTERVAL = 3           # delay after full token cycle
-    INITIAL_BACKOFF = 3          # seconds
-    MAX_BACKOFF = 60             # cap exponential backoff
+    PER_TOKEN_DELAY = 1
+    CYCLE_INTERVAL = 3
+    INITIAL_BACKOFF = 3
+    MAX_BACKOFF = 60
 
     def __init__(self, tokens):
         super().__init__("NSE")
@@ -38,7 +45,19 @@ class NSEMarketConnector(BaseMarketConnector):
         self.api = None
 
     def _login(self):
+        """
+        Login with proper SSL certificate handling.
+        """
+
+        # 🔥 Force requests to use certifi CA bundle
+        requests_session = requests.Session()
+        requests_session.verify = certifi.where()
+
         self.api = SmartConnect(api_key=os.getenv("NSE_API_KEY"))
+
+        # 🔥 Inject our verified session into SmartConnect
+        if hasattr(self.api, "session"):
+            self.api.session = requests_session
 
         totp = pyotp.TOTP(os.getenv("NSE_TOTP_SECRET")).now()
 
@@ -102,7 +121,7 @@ class NSEMarketConnector(BaseMarketConnector):
 
     async def start_trade_stream(self):
 
-        print("🚀 Starting NSE REST Polling Connector (Stable Mode)...")
+        print("🚀 Starting NSE REST Polling Connector (SSL-Safe Mode)...")
 
         self._login()
 
@@ -115,7 +134,6 @@ class NSEMarketConnector(BaseMarketConnector):
 
         while True:
             try:
-                # 🔥 Sequential polling
                 for token in self.tokens:
 
                     raw = await self._fetch_ltp(token)
@@ -136,13 +154,9 @@ class NSEMarketConnector(BaseMarketConnector):
                             "last_update": datetime.now(timezone.utc)
                         }
 
-                    # ✅ Per-token throttling
                     await asyncio.sleep(self.PER_TOKEN_DELAY)
 
-                # ✅ Reset backoff after successful cycle
                 backoff = self.INITIAL_BACKOFF
-
-                # ✅ Global cycle interval
                 await asyncio.sleep(self.CYCLE_INTERVAL)
 
             except Exception as e:
@@ -153,7 +167,6 @@ class NSEMarketConnector(BaseMarketConnector):
                     "last_update": datetime.now(timezone.utc)
                 }
 
-                # ✅ Exponential backoff
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, self.MAX_BACKOFF)
 

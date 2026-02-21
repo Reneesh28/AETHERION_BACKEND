@@ -1,7 +1,8 @@
 """
 @title AETHERION Market Engine (FastAPI Service)
-@notice Multi-market ingestion engine with stream monitoring
+@notice Multi-market ingestion engine with stream monitoring + Regime WebSocket
 """
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -9,6 +10,7 @@ from fastapi import FastAPI, WebSocket
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+
 from fastapi_market.simulator import MarketSimulator
 from fastapi_market.service import save_tick
 from fastapi_market.database import (
@@ -24,22 +26,33 @@ from fastapi_market.connectors.us_market_connector import USMarketConnector
 from fastapi_market.connectors.nse_market_connector import NSEMarketConnector
 from fastapi_market.stream_status import stream_status
 from fastapi_market.feature_engine import FeatureEngine
+from fastapi_market.regime_poller import poll_regime
+from fastapi_market.regime_ws import regime_manager
+
 
 feature_engine = FeatureEngine()
+
 CRYPTO_MARKETS = [{"type": MarketType.CRYPTO, "symbol": "btcusdt"}]
 US_SYMBOLS = ["NASDAQ:TSLA", "NYSE:IBM"]
 NSE_TOKENS = ["2885", "11536", "15259", "11915"]
+
 DATA_MODE = "LIVE"
 
+
+# =====================================================
+# LIFESPAN
+# =====================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
     tasks = []
-
     app.state.loop = asyncio.get_running_loop()
 
     if DATA_MODE == "LIVE":
 
+        # ----------------------------
+        # CRYPTO
+        # ----------------------------
         for market in CRYPTO_MARKETS:
             connector = get_connector(
                 market["type"],
@@ -54,39 +67,68 @@ async def lifespan(app: FastAPI):
                 tasks.append(
                     asyncio.create_task(connector.start_orderbook_stream())
                 )
+
+        # ----------------------------
+        # US MARKET
+        # ----------------------------
         us_connector = USMarketConnector(US_SYMBOLS)
         tasks.append(
             asyncio.create_task(us_connector.start_trade_stream())
         )
+
+        # ----------------------------
+        # NSE MARKET
+        # ----------------------------
         print("🚀 Starting NSE Connector...")
         nse_connector = NSEMarketConnector(NSE_TOKENS)
         tasks.append(
             asyncio.create_task(nse_connector.start_trade_stream())
         )
+
+        # ----------------------------
+        # FEATURE ENGINE
+        # ----------------------------
         print("🧠 Starting Feature Consumer Loop...")
         tasks.append(
             asyncio.create_task(feature_engine.start_feature_consumer())
         )
 
+        # ----------------------------
+        # REGIME POLLER
+        # ----------------------------
+        print("📡 Starting Regime Poller...")
+        tasks.append(
+            asyncio.create_task(poll_regime())
+        )
+
     yield
 
+    # Graceful shutdown
     for task in tasks:
         task.cancel()
 
     await asyncio.gather(*tasks, return_exceptions=True)
 
+
 app = FastAPI(lifespan=lifespan)
+
 simulator = MarketSimulator()
 current_candle = None
 candle_start_time = None
 
+
+# =====================================================
+# BASIC ENDPOINTS
+# =====================================================
 @app.get("/")
 def root():
     return {"status": "AETHERION Multi-Market Engine Running"}
 
+
 @app.get("/api/market/status")
 async def market_status():
     return stream_status
+
 
 @app.get("/api/market/active")
 async def active_markets():
@@ -96,6 +138,10 @@ async def active_markets():
         "nse": NSE_TOKENS
     }
 
+
+# =====================================================
+# SNAPSHOT
+# =====================================================
 @app.get("/api/market/snapshot/{market}")
 async def market_snapshot(market: str):
 
@@ -120,6 +166,10 @@ async def market_snapshot(market: str):
 
     return {"data": latest}
 
+
+# =====================================================
+# TRADES
+# =====================================================
 @app.get("/api/market/trades/{market}")
 async def get_trades(market: str):
 
@@ -145,6 +195,10 @@ async def get_trades(market: str):
 
     return {"trades": data}
 
+
+# =====================================================
+# ORDERBOOK
+# =====================================================
 @app.get("/api/market/orderbook/{market}")
 async def get_orderbook(market: str):
 
@@ -168,6 +222,10 @@ async def get_orderbook(market: str):
 
     return {"orderbook": latest}
 
+
+# =====================================================
+# FEATURES
+# =====================================================
 @app.get("/api/market/features/{market}")
 async def get_features(market: str, limit: int = 50):
 
@@ -197,17 +255,24 @@ async def get_features(market: str, limit: int = 50):
         "features": data
     }
 
-@app.get("/api/market/candles")
-async def get_candles():
 
-    cursor = candle_collection.find().sort("start_time", -1).limit(20)
-    data = await cursor.to_list(length=20)
+# =====================================================
+# REGIME WEBSOCKET
+# =====================================================
+@app.websocket("/ws/regime")
+async def regime_websocket(websocket: WebSocket):
+    await regime_manager.connect(websocket)
 
-    for item in data:
-        item["_id"] = str(item["_id"])
+    try:
+        while True:
+            await asyncio.sleep(60)
+    except:
+        regime_manager.disconnect(websocket)
 
-    return {"candles": data}
 
+# =====================================================
+# MARKET SIMULATION WEBSOCKET
+# =====================================================
 @app.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):
 
