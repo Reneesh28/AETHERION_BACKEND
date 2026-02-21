@@ -13,14 +13,9 @@ from fastapi_market.schemas import (
 )
 from fastapi_market.database import (
     trade_collection,
-    crypto_orderbook_collection   # ✅ Updated
+    crypto_orderbook_collection
 )
-
-# LOGGING
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+from fastapi_market.stream_status import update_status, set_disconnected
 
 logger = logging.getLogger("crypto_connector")
 
@@ -28,10 +23,6 @@ logger = logging.getLogger("crypto_connector")
 class CryptoConnector(BaseMarketConnector):
     """
     Binance Crypto Market Connector
-    - Async (Motor based)
-    - Batch trade inserts
-    - Orderbook snapshots
-    - Reconnect logic
     """
 
     def __init__(self, symbol: str):
@@ -48,9 +39,6 @@ class CryptoConnector(BaseMarketConnector):
         self.heartbeat_timeout = 20
         self.reconnect_delay = 5
 
-    # ==============================
-    # TRADE STREAM
-    # ==============================
     async def start_trade_stream(self):
 
         queue = asyncio.Queue()
@@ -70,7 +58,9 @@ class CryptoConnector(BaseMarketConnector):
 
         while True:
             try:
-                logger.info(f"🔌 Connecting to Binance trade stream for {self.symbol}...")
+                logger.info(
+                    f"🔌 Connecting to Binance trade stream for {self.symbol}..."
+                )
 
                 async with websockets.connect(
                     self.trade_url,
@@ -81,30 +71,29 @@ class CryptoConnector(BaseMarketConnector):
 
                     async for message in ws:
                         raw = json.loads(message)
+
                         normalized = self.normalize_trade(raw)
+
                         await queue.put(normalized)
 
+                        update_status("CRYPTO", normalized["price"])
+
             except Exception as e:
+                set_disconnected("CRYPTO")
                 logger.error(f"❌ Trade stream error: {e}")
-                logger.info(
-                    f"🔄 Reconnecting in {self.reconnect_delay} seconds..."
-                )
                 await asyncio.sleep(self.reconnect_delay)
 
-    # ==============================
-    # ORDERBOOK STREAM
-    # ==============================
     async def start_orderbook_stream(self):
 
         while True:
             try:
-                logger.info(f"🔌 Connecting to Binance orderbook stream for {self.symbol}...")
+                logger.info(
+                    f"🔌 Connecting to Binance orderbook stream for {self.symbol}..."
+                )
 
                 async with websockets.connect(self.depth_url) as ws:
 
                     logger.info("✅ Connected to orderbook stream")
-
-                    last_message_time = time.time()
 
                     async for message in ws:
 
@@ -113,32 +102,15 @@ class CryptoConnector(BaseMarketConnector):
                         if "b" not in raw or "a" not in raw:
                             continue
 
-                        last_message_time = time.time()
-
                         normalized = self.normalize_orderbook(raw)
 
-                        # ✅ Write to crypto-specific collection
                         await crypto_orderbook_collection.insert_one(normalized)
-
-                        if (
-                            time.time() - last_message_time
-                            > self.heartbeat_timeout
-                        ):
-                            logger.warning(
-                                "⚠ Heartbeat lost. Reconnecting..."
-                            )
-                            break
 
             except Exception as e:
                 logger.error(f"❌ Orderbook stream error: {e}")
-                logger.info(
-                    f"🔄 Reconnecting in {self.reconnect_delay} seconds..."
-                )
                 await asyncio.sleep(self.reconnect_delay)
 
-    # ==============================
-    # NORMALIZATION
-    # ==============================
+
     def normalize_trade(self, raw_data):
 
         receive_time = int(

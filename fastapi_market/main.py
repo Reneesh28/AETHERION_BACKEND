@@ -1,6 +1,6 @@
 """
 @title AETHERION Market Engine (FastAPI Service)
-@notice Multi-market ingestion engine
+@notice Multi-market ingestion engine with stream monitoring
 """
 from dotenv import load_dotenv
 load_dotenv()
@@ -19,22 +19,22 @@ from fastapi_market.database import (
     us_orderbook_collection,
     nse_orderbook_collection
 )
-
 from fastapi_market.config import MarketType
 from fastapi_market.connectors.connector_factory import get_connector
+from fastapi_market.connectors.us_market_connector import USMarketConnector
+from fastapi_market.connectors.nse_market_connector import NSEMarketConnector
+from fastapi_market.stream_status import stream_status
 
-
-# MULTI-MARKET CONFIG
-MARKETS = [
+CRYPTO_MARKETS = [
     {"type": MarketType.CRYPTO, "symbol": "btcusdt"},
-    {"type": MarketType.US_STOCK, "symbol": "NASDAQ:TSLA"},
-    {"type": MarketType.US_STOCK, "symbol": "NYSE:IBM"},
 ]
 
-DATA_MODE = "LIVE"  # LIVE | SIMULATION
+US_SYMBOLS = ["NASDAQ:TSLA", "NYSE:IBM"]
 
+NSE_TOKENS = ["2885", "11536", "15259", "11915"]  # RELIANCE, TCS, RPOWER, YESBANK
 
-# LIFESPAN - START ALL CONNECTORS
+DATA_MODE = "LIVE"
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -42,26 +42,35 @@ async def lifespan(app: FastAPI):
 
     if DATA_MODE == "LIVE":
 
-        for market in MARKETS:
+        for market in CRYPTO_MARKETS:
 
             connector = get_connector(
                 market["type"],
                 market["symbol"]
             )
 
-            trade_task = asyncio.create_task(
-                connector.start_trade_stream()
+            tasks.append(
+                asyncio.create_task(connector.start_trade_stream())
             )
-            tasks.append(trade_task)
 
             if hasattr(connector, "start_orderbook_stream"):
-                ob_task = asyncio.create_task(
-                    connector.start_orderbook_stream()
+                tasks.append(
+                    asyncio.create_task(connector.start_orderbook_stream())
                 )
-                tasks.append(ob_task)
+        us_connector = USMarketConnector(US_SYMBOLS)
+
+        tasks.append(
+            asyncio.create_task(us_connector.start_trade_stream())
+        )
+        print("🚀 Starting NSE Connector...")
+
+        nse_connector = NSEMarketConnector(NSE_TOKENS)
+
+        tasks.append(
+            asyncio.create_task(nse_connector.connect())
+        )
 
     yield
-
     for task in tasks:
         task.cancel()
 
@@ -74,22 +83,38 @@ simulator = MarketSimulator()
 current_candle = None
 candle_start_time = None
 
-# HEALTH CHECK
 @app.get("/")
 def root():
     return {"status": "AETHERION Multi-Market Engine Running"}
 
-# ACTIVE MARKETS
+@app.get("/api/market/status")
+async def market_status():
+    return stream_status
+
 @app.get("/api/market/active")
 async def active_markets():
-    
-    return {"markets": [m["symbol"] for m in MARKETS]}
+    return {
+        "crypto": [m["symbol"] for m in CRYPTO_MARKETS],
+        "us": US_SYMBOLS,
+        "nse": NSE_TOKENS
+    }
 
-# SNAPSHOT PER SYMBOL
-@app.get("/api/market/snapshot/{symbol}")
-async def market_snapshot(symbol: str):
+@app.get("/api/market/snapshot/{market}")
+async def market_snapshot(market: str):
+
+    market = market.lower()
+
+    if market == "crypto":
+        market_type = "CRYPTO"
+    elif market == "us":
+        market_type = "US_STOCK"
+    elif market == "nse":
+        market_type = "NSE"
+    else:
+        return {"error": "Invalid market type"}
+
     latest = await trade_collection.find_one(
-        {"symbol": symbol},
+        {"market_type": market_type},
         sort=[("receive_timestamp", -1)]
     )
 
@@ -98,13 +123,22 @@ async def market_snapshot(symbol: str):
 
     return {"data": latest}
 
+@app.get("/api/market/trades/{market}")
+async def get_trades(market: str):
 
-# LAST 50 TRADES PER SYMBOL
-@app.get("/api/market/trades/{symbol}")
-async def get_trades(symbol: str):
+    market = market.lower()
+
+    if market == "crypto":
+        market_type = "CRYPTO"
+    elif market == "us":
+        market_type = "US_STOCK"
+    elif market == "nse":
+        market_type = "NSE"
+    else:
+        return {"error": "Invalid market type"}
 
     cursor = trade_collection.find(
-        {"symbol": symbol}
+        {"market_type": market_type}
     ).sort("receive_timestamp", -1).limit(50)
 
     data = await cursor.to_list(length=50)
@@ -114,25 +148,21 @@ async def get_trades(symbol: str):
 
     return {"trades": data}
 
+@app.get("/api/market/orderbook/{market}")
+async def get_orderbook(market: str):
 
-# ORDERBOOK PER SYMBOL
-@app.get("/api/market/orderbook/{symbol}")
-async def get_orderbook(symbol: str):
+    market = market.lower()
 
-    if symbol.islower():  # Crypto
+    if market == "crypto":
         collection = crypto_orderbook_collection
-
-    elif symbol.startswith("NASDAQ:") or symbol.startswith("NYSE:"):
+    elif market == "us":
         collection = us_orderbook_collection
-
-    elif symbol.startswith("NSE:"):
+    elif market == "nse":
         collection = nse_orderbook_collection
-
     else:
-        return {"error": "Unsupported symbol"}
+        return {"error": "Invalid market type"}
 
     latest = await collection.find_one(
-        {"symbol": symbol.upper()},
         sort=[("receive_timestamp", -1)]
     )
 
@@ -141,8 +171,6 @@ async def get_orderbook(symbol: str):
 
     return {"orderbook": latest}
 
-
-# CANDLES (SIMULATION MODE)
 @app.get("/api/market/candles")
 async def get_candles():
 
@@ -154,8 +182,6 @@ async def get_candles():
 
     return {"candles": data}
 
-
-# SIMULATION WEBSOCKET
 @app.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):
 
@@ -204,4 +230,3 @@ async def market_websocket(websocket: WebSocket):
             current_candle["volume"] += tick["volume"]
 
         await websocket.send_json(tick)
-        await asyncio.sleep(1)
