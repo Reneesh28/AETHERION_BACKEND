@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 import logging
 import websockets
 
@@ -11,11 +10,9 @@ from fastapi_market.schemas import (
     unified_trade_schema,
     unified_orderbook_schema
 )
-from fastapi_market.database import (
-    trade_collection,
-    crypto_orderbook_collection
-)
+from fastapi_market.database import crypto_orderbook_collection
 from fastapi_market.stream_status import update_status, set_disconnected
+from fastapi_market.service import save_tick  # ✅ IMPORTANT
 
 logger = logging.getLogger("crypto_connector")
 
@@ -36,25 +33,12 @@ class CryptoConnector(BaseMarketConnector):
             f"wss://stream.binance.com:9443/ws/{symbol.lower()}@depth@100ms"
         )
 
-        self.heartbeat_timeout = 20
         self.reconnect_delay = 5
 
+    # =====================================================
+    # TRADE STREAM
+    # =====================================================
     async def start_trade_stream(self):
-
-        queue = asyncio.Queue()
-
-        async def mongo_writer():
-            buffer = []
-
-            while True:
-                tick = await queue.get()
-                buffer.append(tick)
-
-                if len(buffer) >= 200:
-                    await trade_collection.insert_many(buffer)
-                    buffer.clear()
-
-        asyncio.create_task(mongo_writer())
 
         while True:
             try:
@@ -74,7 +58,8 @@ class CryptoConnector(BaseMarketConnector):
 
                         normalized = self.normalize_trade(raw)
 
-                        await queue.put(normalized)
+                        # 🔥 Use service layer (critical fix)
+                        await save_tick(normalized)
 
                         update_status("CRYPTO", normalized["price"])
 
@@ -83,6 +68,9 @@ class CryptoConnector(BaseMarketConnector):
                 logger.error(f"❌ Trade stream error: {e}")
                 await asyncio.sleep(self.reconnect_delay)
 
+    # =====================================================
+    # ORDERBOOK STREAM
+    # =====================================================
     async def start_orderbook_stream(self):
 
         while True:
@@ -110,7 +98,9 @@ class CryptoConnector(BaseMarketConnector):
                 logger.error(f"❌ Orderbook stream error: {e}")
                 await asyncio.sleep(self.reconnect_delay)
 
-
+    # =====================================================
+    # NORMALIZATION
+    # =====================================================
     def normalize_trade(self, raw_data):
 
         receive_time = int(

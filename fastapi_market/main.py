@@ -5,12 +5,14 @@
 
 from dotenv import load_dotenv
 load_dotenv()
+
 from fastapi import FastAPI, WebSocket
 import asyncio
 from contextlib import asynccontextmanager
+
 from fastapi_market.simulator import MarketSimulator
 from fastapi_market.database import (
-    candle_collection,
+    db,
     trade_collection,
     crypto_orderbook_collection,
     nasdaq_orderbook_collection,
@@ -20,14 +22,22 @@ from fastapi_market.config import MarketType
 from fastapi_market.connectors.connector_factory import get_connector
 from fastapi_market.connectors.us_market_connector import USMarketConnector
 from fastapi_market.stream_status import stream_status
-from fastapi_market.feature_engine import FeatureEngine
 from fastapi_market.regime_poller import poll_regime
 from fastapi_market.regime_ws import regime_manager
-from fastapi_market.candle_engine import MultiTimeframeCandleEngine  # ✅ NEW IMPORT
+from fastapi_market.candle_engine import MultiTimeframeCandleEngine
+
+# 🔥 NEW: Import service registration function
+from fastapi_market.service import register_candle_engine
 
 
-feature_engine = FeatureEngine()
-candle_engine = MultiTimeframeCandleEngine()
+# =====================================================
+# INITIALIZE ENGINES
+# =====================================================
+
+candle_engine = MultiTimeframeCandleEngine(db)
+
+# 🔥 Inject candle engine into service layer (fix circular import)
+register_candle_engine(candle_engine)
 
 
 CRYPTO_MARKETS = [{"type": MarketType.CRYPTO, "symbol": "btcusdt"}]
@@ -79,20 +89,6 @@ async def lifespan(app: FastAPI):
         )
 
         # ----------------------------
-        # FEATURE ENGINE
-        # ----------------------------
-        tasks.append(
-            asyncio.create_task(feature_engine.start_feature_consumer())
-        )
-
-        # ----------------------------
-        # 🕯️ CANDLE ENGINE (NEW)
-        # ----------------------------
-        tasks.append(
-            asyncio.create_task(candle_engine.start())
-        )
-
-        # ----------------------------
         # REGIME POLLER
         # ----------------------------
         tasks.append(
@@ -101,10 +97,23 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # =================================================
+    # 🔥 CLEAN SHUTDOWN
+    # =================================================
+    print("⚠️ Shutting down AETHERION Engine...")
+
+    try:
+        await candle_engine.flush_all()
+        print("✅ Candle engine flushed successfully.")
+    except Exception as e:
+        print(f"❌ Candle flush error: {e}")
+
     for task in tasks:
         task.cancel()
 
     await asyncio.gather(*tasks, return_exceptions=True)
+
+    print("🛑 All background tasks stopped.")
 
 
 app = FastAPI(lifespan=lifespan)
@@ -216,6 +225,9 @@ async def get_features(market: str, limit: int = 50):
 
     if market not in ["CRYPTO", "NASDAQ", "NYSE"]:
         return {"error": "Invalid market type"}
+
+    from fastapi_market.feature_engine import FeatureEngine
+    feature_engine = FeatureEngine()
 
     cursor = feature_engine.collection.find(
         {"market": market}

@@ -2,8 +2,11 @@ import asyncio
 import httpx
 import mysql.connector
 from datetime import datetime
+from collections import deque
 
 from fastapi_market.regime_ws import regime_manager
+from fastapi_market.regime_fusion import RegimeFusion
+from fastapi_market.strategy_engine import StrategyEngine
 
 
 FLASK_REGIME_URL = "http://127.0.0.1:5001/detect_regime"
@@ -15,118 +18,264 @@ MYSQL_CONFIG = {
     "database": "aetherion"
 }
 
-# 🔥 Optimization Controls
+# =========================================
+# CONFIGURATION
+# =========================================
 POLL_INTERVAL = 10
-CONFIDENCE_THRESHOLD = 0.60  # Only accept regime if confidence > 60%
+CONFIDENCE_THRESHOLD = 0.60
 
-# 🔥 In-memory cache
-last_regime_state = None
+TIMEFRAMES = ["1m", "5m", "15m", "1h"]
+
+STABILITY_WINDOW = 5
+MIN_CONFIRMATIONS = 3
+
+# =========================================
+# STABILITY STATE
+# =========================================
+state_buffers = {
+    tf: deque(maxlen=STABILITY_WINDOW)
+    for tf in TIMEFRAMES
+}
+
+stable_state = {tf: None for tf in TIMEFRAMES}
+
+# =========================================
+# FUSION + STRATEGY
+# =========================================
+fusion_engine = RegimeFusion()
+strategy_engine = StrategyEngine()
+
+last_meta_regime = None
+last_strategy = None
 
 
+# =========================================
+# MYSQL CONNECTION
+# =========================================
+def get_mysql_connection():
+    return mysql.connector.connect(**MYSQL_CONFIG)
+
+
+# =========================================
+# STABILITY EVALUATION
+# =========================================
+def evaluate_stability(timeframe):
+
+    buffer = state_buffers[timeframe]
+
+    if len(buffer) < STABILITY_WINDOW:
+        return None
+
+    counts = {}
+    for state in buffer:
+        counts[state] = counts.get(state, 0) + 1
+
+    majority_state = max(counts, key=counts.get)
+
+    if counts[majority_state] >= MIN_CONFIRMATIONS:
+        return majority_state
+
+    return None
+
+
+# =========================================
+# MAIN POLLER
+# =========================================
 async def poll_regime():
-    """
-    Poll Flask Regime Service every 10 seconds
-    Insert only on regime change
-    Apply confidence filtering
-    Broadcast updates
-    """
 
-    global last_regime_state
+    global last_meta_regime
+    global last_strategy
 
-    while True:
-        try:
-            print("⏳ Polling regime...")
+    conn = None
+    cursor = None
 
-            async with httpx.AsyncClient() as client:
+    try:
+        conn = get_mysql_connection()
+        cursor = conn.cursor()
+        print("✅ MySQL connection established.")
 
-                payload = {
-                    "market": "CRYPTO",
-                    "symbol": "BTCUSDT",
-                    "model_name": "crypto_1m"
-                }
+        while True:
+            try:
+                async with httpx.AsyncClient() as client:
 
-                response = await client.post(
-                    FLASK_REGIME_URL,
-                    json=payload,
-                    timeout=10
-                )
+                    # ============================
+                    # 1️⃣ TIMEFRAME REGIMES
+                    # ============================
+                    for tf in TIMEFRAMES:
 
-                if response.status_code == 200:
+                        payload = {
+                            "market": "CRYPTO",
+                            "symbol": "BTCUSDT",
+                            "model_name": f"crypto_{tf}"
+                        }
 
-                    data = response.json()
+                        response = await client.post(
+                            FLASK_REGIME_URL,
+                            json=payload,
+                            timeout=10
+                        )
 
-                    state = data["state"]
-                    confidence = data["confidence"]
+                        if response.status_code != 200:
+                            continue
 
-                    # 🔹 Confidence Filter
-                    if confidence < CONFIDENCE_THRESHOLD:
-                        print(f"⚠️ Low confidence ({confidence}) → Ignored")
-                        await asyncio.sleep(POLL_INTERVAL)
-                        continue
+                        data = response.json()
 
-                    # 🔹 Insert only if regime changed
-                    if state != last_regime_state:
+                        state = data["state"]
+                        confidence = data["confidence"]
 
-                        insert_into_mysql(data, timeframe="1m")
+                        if confidence < CONFIDENCE_THRESHOLD:
+                            continue
+
+                        state_buffers[tf].append(state)
+
+                        confirmed_state = evaluate_stability(tf)
+
+                        if confirmed_state is None:
+                            continue
+
+                        if confirmed_state != stable_state[tf]:
+
+                            insert_timeframe_regime(
+                                cursor,
+                                conn,
+                                data,
+                                timeframe=tf
+                            )
+
+                            await regime_manager.broadcast({
+                                "type": "timeframe",
+                                "market": data["market"],
+                                "symbol": data["symbol"],
+                                "timeframe": tf,
+                                "regime": data["regime"],
+                                "confidence": confidence,
+                                "state": confirmed_state,
+                                "timestamp": datetime.utcnow().isoformat()
+                            })
+
+                            print(
+                                f"🔒 {tf} Stable Regime → "
+                                f"{data['regime']}"
+                            )
+
+                            stable_state[tf] = confirmed_state
+
+                    # ============================
+                    # 2️⃣ FUSION LAYER
+                    # ============================
+                    meta = fusion_engine.fuse(stable_state)
+
+                    if meta and meta["meta_regime"] != last_meta_regime:
+
+                        insert_meta_regime(cursor, conn, meta)
 
                         await regime_manager.broadcast({
-                            "market": data["market"],
-                            "symbol": data["symbol"],
-                            "regime": data["regime"],
-                            "confidence": confidence,
-                            "state": state,
+                            "type": "meta",
+                            "meta_regime": meta["meta_regime"],
+                            "confidence": meta["confidence"],
+                            "components": meta["components"],
                             "timestamp": datetime.utcnow().isoformat()
                         })
 
-                        print(f"🔁 Regime Changed → {data['regime']} ({confidence})")
+                        print(f"🧠 META REGIME → {meta['meta_regime']}")
 
-                        last_regime_state = state
+                        last_meta_regime = meta["meta_regime"]
 
-                    else:
-                        print("⏳ No regime change")
+                        # ============================
+                        # 3️⃣ STRATEGY SWITCHING
+                        # ============================
+                        strategy_data = strategy_engine.select_strategy(meta)
 
-                else:
-                    print("❌ Regime API Error:", response.text)
+                        if strategy_data:
+                            strategy_name = strategy_data["strategy"]
 
-        except Exception as e:
-            print("❌ Polling Error:", e)
+                            if strategy_name != last_strategy:
 
-        await asyncio.sleep(POLL_INTERVAL)
+                                insert_strategy_state(
+                                    cursor,
+                                    conn,
+                                    strategy_data
+                                )
+
+                                await regime_manager.broadcast({
+                                    "type": "strategy",
+                                    "meta_regime": strategy_data["meta_regime"],
+                                    "strategy": strategy_name,
+                                    "timestamp": datetime.utcnow().isoformat()
+                                })
+
+                                print(f"🎯 Strategy Switched → {strategy_name}")
+
+                                last_strategy = strategy_name
+
+            except Exception as e:
+                print("❌ Polling Error:", e)
+
+            await asyncio.sleep(POLL_INTERVAL)
+
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
 
 
-def insert_into_mysql(data, timeframe):
+# =========================================
+# INSERT FUNCTIONS
+# =========================================
+def insert_timeframe_regime(cursor, conn, data, timeframe):
+
+    query = """
+    INSERT INTO regime_state
+    (market, symbol, timeframe, regime, confidence, state, detected_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
     """
-    Insert regime state into MySQL
-    Only called when regime changes
+
+    values = (
+        data["market"],
+        data["symbol"],
+        timeframe,
+        data["regime"],
+        data["confidence"],
+        data["state"],
+        datetime.utcnow()
+    )
+
+    cursor.execute(query, values)
+    conn.commit()
+
+
+def insert_meta_regime(cursor, conn, meta):
+
+    query = """
+    INSERT INTO meta_regime_state
+    (meta_regime, confidence, detected_at)
+    VALUES (%s, %s, %s)
     """
 
-    try:
-        conn = mysql.connector.connect(**MYSQL_CONFIG)
-        cursor = conn.cursor()
+    values = (
+        meta["meta_regime"],
+        meta["confidence"],
+        datetime.utcnow()
+    )
 
-        query = """
-        INSERT INTO regime_state
-        (market, symbol, timeframe, regime, confidence, state, detected_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
+    cursor.execute(query, values)
+    conn.commit()
 
-        values = (
-            data["market"],
-            data["symbol"],
-            timeframe,
-            data["regime"],
-            data["confidence"],
-            data["state"],
-            datetime.utcnow()
-        )
 
-        cursor.execute(query, values)
-        conn.commit()
+def insert_strategy_state(cursor, conn, strategy_data):
 
-        cursor.close()
-        conn.close()
+    query = """
+    INSERT INTO strategy_state
+    (meta_regime, strategy, detected_at)
+    VALUES (%s, %s, %s)
+    """
 
-        print("💾 Stored regime in DB")
+    values = (
+        strategy_data["meta_regime"],
+        strategy_data["strategy"],
+        datetime.utcnow()
+    )
 
-    except Exception as e:
-        print("❌ MySQL Insert Error:", e)
+    cursor.execute(query, values)
+    conn.commit()

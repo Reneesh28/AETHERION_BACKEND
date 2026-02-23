@@ -5,10 +5,11 @@ import logging
 import websockets
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+
 from fastapi_market.connectors.base_connector import BaseMarketConnector
 from fastapi_market.schemas import unified_trade_schema
-from fastapi_market.database import trade_collection
 from fastapi_market.stream_status import update_status, set_disconnected
+from fastapi_market.service import save_tick  # ✅ IMPORTANT
 
 load_dotenv()
 
@@ -22,15 +23,6 @@ class USMarketConnector(BaseMarketConnector):
     """
 
     def __init__(self, symbols: list[str]):
-        """
-        symbols format:
-        [
-            "NASDAQ:AAPL",
-            "NASDAQ:MSFT",
-            "NYSE:JPM",
-            "NYSE:KO"
-        ]
-        """
         super().__init__("US_MULTI")
 
         self.symbols = symbols
@@ -41,15 +33,16 @@ class USMarketConnector(BaseMarketConnector):
 
         self.reconnect_delay = 5
 
-        # Extract tickers only (AAPL, MSFT, etc.)
         self.tickers = [s.split(":")[1] for s in symbols]
 
-        # Map ticker -> exchange
         self.exchange_map = {
             s.split(":")[1]: s.split(":")[0]
             for s in symbols
         }
 
+    # =====================================================
+    # TRADE STREAM
+    # =====================================================
     async def start_trade_stream(self):
 
         while True:
@@ -77,7 +70,7 @@ class USMarketConnector(BaseMarketConnector):
 
                     logger.info("✅ Authenticated with Alpaca")
 
-                    # Subscribe to trades
+                    # Subscribe
                     sub_msg = {
                         "action": "subscribe",
                         "trades": self.tickers
@@ -95,29 +88,26 @@ class USMarketConnector(BaseMarketConnector):
 
                                 normalized = self.normalize_trade(event)
 
-                                await trade_collection.insert_one(normalized)
+                                # 🔥 Use service layer
+                                await save_tick(normalized)
 
-                                # Update status per exchange
                                 exchange = normalized["symbol"].split(":")[0]
-
-                                update_status(
-                                    exchange,
-                                    normalized["price"]
-                                )
+                                update_status(exchange, normalized["price"])
 
             except Exception as e:
                 logger.error(f"❌ US trade stream error: {e}")
 
-                # Mark each exchange disconnected
                 for exchange in set(self.exchange_map.values()):
                     set_disconnected(exchange)
 
                 await asyncio.sleep(self.reconnect_delay)
 
     async def start_orderbook_stream(self):
-        # Alpaca basic feed does not provide full L2 orderbook
         return
 
+    # =====================================================
+    # NORMALIZATION
+    # =====================================================
     def normalize_trade(self, raw):
 
         receive_time = int(
@@ -134,11 +124,11 @@ class USMarketConnector(BaseMarketConnector):
         exchange = self.exchange_map.get(ticker, "US")
 
         return unified_trade_schema(
-            market_type=exchange,  # NASDAQ or NYSE
+            market_type=exchange,
             symbol=f"{exchange}:{ticker}",
             price=float(raw["p"]),
             quantity=float(raw["s"]),
-            side="BUY",  # Alpaca trade feed doesn't expose aggressor side
+            side="BUY",
             exchange_timestamp=exchange_ts,
             receive_timestamp=receive_time
         )
