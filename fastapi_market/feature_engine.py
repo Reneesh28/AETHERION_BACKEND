@@ -69,18 +69,15 @@ class FeatureEngine:
         try:
             if market == "CRYPTO":
                 collection = self.db["crypto_orderbooks"]
-            elif market == "US_STOCK":
-                collection = self.db["us_orderbooks"]
-            elif market == "NSE":
-                collection = self.db["nse_orderbooks"]
+            elif market == "NASDAQ":
+                collection = self.db["nasdaq_orderbooks"]
+            elif market == "NYSE":
+                collection = self.db["nyse_orderbooks"]
             else:
                 return 0.0
 
             orderbook = await collection.find_one(
-                {
-                    "symbol": symbol,
-                    "market_type": market
-                },
+                {"symbol": symbol},
                 sort=[("receive_timestamp", -1)]
             )
 

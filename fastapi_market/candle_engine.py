@@ -1,30 +1,38 @@
 import asyncio
-from collections import defaultdict
-
 from fastapi_market.database import trade_collection, candle_collection
 
 
 class CandleEngine:
     """
     Aggregates real_market_ticks into 1-minute candles
+    Uses Mongo _id for streaming cursor (safe)
+    Uses receive_timestamp for time bucketing
     """
 
     def __init__(self):
         self.current_candles = {}
-        self.last_processed_ts = 0
 
     async def start(self):
+
         print("🕯️ Candle Engine Started (1m aggregation)")
+
+        # 🔥 Initialize cursor from latest document
+        latest_doc = await trade_collection.find_one(
+            sort=[("_id", -1)]
+        )
+
+        last_id = latest_doc["_id"] if latest_doc else None
 
         while True:
 
-            # Fetch new ticks since last processed timestamp
+            query = {}
+
+            if last_id:
+                query["_id"] = {"$gt": last_id}
+
             cursor = trade_collection.find(
-                {
-                    "market_type": "CRYPTO",
-                    "exchange_timestamp": {"$gt": self.last_processed_ts}
-                }
-            ).sort("exchange_timestamp", 1)
+                query
+            ).sort("_id", 1).limit(1000)
 
             ticks = await cursor.to_list(length=1000)
 
@@ -34,22 +42,21 @@ class CandleEngine:
 
             for tick in ticks:
                 await self.process_tick(tick)
+                last_id = tick["_id"]
 
             await asyncio.sleep(0.1)
 
     async def process_tick(self, tick):
 
         symbol = tick["symbol"]
-        ts = int(tick["exchange_timestamp"])
+        ts = int(tick["receive_timestamp"])  # ✅ Use receive time
         price = float(tick["price"])
         qty = float(tick["quantity"])
 
         minute_bucket = ts // 60000
-        candle_key = (symbol, minute_bucket)
 
         if symbol not in self.current_candles:
 
-            # First tick ever for this symbol
             self.current_candles[symbol] = {
                 "bucket": minute_bucket,
                 "open": price,
@@ -64,7 +71,7 @@ class CandleEngine:
 
         if minute_bucket == current["bucket"]:
 
-            # Update existing candle
+            # Update current candle
             current["high"] = max(current["high"], price)
             current["low"] = min(current["low"], price)
             current["close"] = price
@@ -72,10 +79,10 @@ class CandleEngine:
 
         else:
 
-            # Minute changed → close previous candle
+            # 🔥 Minute changed → close previous candle
             await self.store_candle(symbol, current)
 
-            # Start new candle
+            # 🔥 Start new candle
             self.current_candles[symbol] = {
                 "bucket": minute_bucket,
                 "open": price,
@@ -85,8 +92,6 @@ class CandleEngine:
                 "volume": qty,
                 "open_time": minute_bucket * 60000
             }
-
-        self.last_processed_ts = ts
 
     async def store_candle(self, symbol, candle):
 
