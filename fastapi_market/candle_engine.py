@@ -1,116 +1,149 @@
 import asyncio
-from fastapi_market.database import trade_collection, candle_collection
+from datetime import datetime, timezone
+from collections import defaultdict
 
 
-class CandleEngine:
-    """
-    Aggregates real_market_ticks into 1-minute candles
-    Uses Mongo _id for streaming cursor (safe)
-    Uses receive_timestamp for time bucketing
-    """
+TIMEFRAMES = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "1h": 3_600_000,
+}
 
-    def __init__(self):
-        self.current_candles = {}
 
-    async def start(self):
+class MultiTimeframeCandleEngine:
+    def __init__(self, mongo_client):
+        self.mongo = mongo_client
+        self.lock = asyncio.Lock()
 
-        print("🕯️ Candle Engine Started (1m aggregation)")
-
-        # 🔥 Initialize cursor from latest document
-        latest_doc = await trade_collection.find_one(
-            sort=[("_id", -1)]
+        # market -> symbol -> timeframe -> candle
+        self.active_candles = defaultdict(
+            lambda: defaultdict(dict)
         )
 
-        last_id = latest_doc["_id"] if latest_doc else None
+    def get_bucket_start(self, ts_ms: int, tf_ms: int):
+        return (ts_ms // tf_ms) * tf_ms
 
-        while True:
+    async def process_tick(self, tick: dict):
+        """
+        tick must contain:
+        {
+            market: str,
+            symbol: str,
+            price: float,
+            volume: float,
+            receive_timestamp: int (ms UTC)
+        }
+        """
 
-            query = {}
+        async with self.lock:
 
-            if last_id:
-                query["_id"] = {"$gt": last_id}
+            market = tick["market"]
+            symbol = tick["symbol"]
+            price = float(tick["price"])
+            volume = float(tick.get("volume", 0))
+            ts = int(tick["receive_timestamp"])
 
-            cursor = trade_collection.find(
-                query
-            ).sort("_id", 1).limit(1000)
+            for tf_name, tf_ms in TIMEFRAMES.items():
 
-            ticks = await cursor.to_list(length=1000)
+                bucket_start = self.get_bucket_start(ts, tf_ms)
 
-            if not ticks:
-                await asyncio.sleep(0.5)
-                continue
+                current = self.active_candles[market][symbol].get(tf_name)
 
-            for tick in ticks:
-                await self.process_tick(tick)
-                last_id = tick["_id"]
+                if current is None:
+                    # First candle ever
+                    self.active_candles[market][symbol][tf_name] = (
+                        self._create_new_candle(
+                            market, symbol, tf_name,
+                            bucket_start, price, volume
+                        )
+                    )
+                    continue
 
-            await asyncio.sleep(0.1)
+                # -------------------------
+                # Same Bucket → Update
+                # -------------------------
+                if bucket_start == current["bucket_start"]:
 
-    async def process_tick(self, tick):
+                    current["high"] = max(current["high"], price)
+                    current["low"] = min(current["low"], price)
+                    current["close"] = price
+                    current["volume"] += volume
 
-        symbol = tick["symbol"]
-        ts = int(tick["receive_timestamp"])  # ✅ Use receive time
-        price = float(tick["price"])
-        qty = float(tick["quantity"])
+                # -------------------------
+                # New Bucket → Close + Gap Fill
+                # -------------------------
+                else:
+                    await self._finalize_candle(current)
 
-        minute_bucket = ts // 60000
+                    # Gap handling
+                    prev_bucket = current["bucket_start"]
+                    while bucket_start > prev_bucket + tf_ms:
+                        prev_bucket += tf_ms
 
-        if symbol not in self.current_candles:
+                        gap_candle = self._create_gap_candle(
+                            market, symbol, tf_name,
+                            prev_bucket,
+                            current["close"]
+                        )
 
-            self.current_candles[symbol] = {
-                "bucket": minute_bucket,
-                "open": price,
-                "high": price,
-                "low": price,
-                "close": price,
-                "volume": qty,
-                "open_time": minute_bucket * 60000
-            }
+                        await self._finalize_candle(gap_candle)
 
-        current = self.current_candles[symbol]
+                    # Start new real candle
+                    self.active_candles[market][symbol][tf_name] = (
+                        self._create_new_candle(
+                            market, symbol, tf_name,
+                            bucket_start, price, volume
+                        )
+                    )
 
-        if minute_bucket == current["bucket"]:
-
-            # Update current candle
-            current["high"] = max(current["high"], price)
-            current["low"] = min(current["low"], price)
-            current["close"] = price
-            current["volume"] += qty
-
-        else:
-
-            # 🔥 Minute changed → close previous candle
-            await self.store_candle(symbol, current)
-
-            # 🔥 Start new candle
-            self.current_candles[symbol] = {
-                "bucket": minute_bucket,
-                "open": price,
-                "high": price,
-                "low": price,
-                "close": price,
-                "volume": qty,
-                "open_time": minute_bucket * 60000
-            }
-
-    async def store_candle(self, symbol, candle):
-
-        document = {
-            "market": "CRYPTO",
+    def _create_new_candle(
+        self, market, symbol, tf_name,
+        bucket_start, price, volume
+    ):
+        return {
+            "market": market,
             "symbol": symbol,
-            "timeframe": "1m",
-            "open": candle["open"],
-            "high": candle["high"],
-            "low": candle["low"],
-            "close": candle["close"],
-            "volume": candle["volume"],
-            "open_time": candle["open_time"],
-            "close_time": candle["open_time"] + 60000
+            "timeframe": tf_name,
+            "bucket_start": bucket_start,
+            "open": price,
+            "high": price,
+            "low": price,
+            "close": price,
+            "volume": volume,
         }
 
-        await candle_collection.insert_one(document)
+    def _create_gap_candle(
+        self, market, symbol, tf_name,
+        bucket_start, last_close
+    ):
+        return {
+            "market": market,
+            "symbol": symbol,
+            "timeframe": tf_name,
+            "bucket_start": bucket_start,
+            "open": last_close,
+            "high": last_close,
+            "low": last_close,
+            "close": last_close,
+            "volume": 0.0,
+        }
 
-        print(
-            f"🕯️ Stored 1m candle | {symbol} | "
-            f"O:{candle['open']} C:{candle['close']}"
-        )
+    async def _finalize_candle(self, candle):
+        """
+        Store to Mongo.
+        Push to WebSocket if needed.
+        """
+
+        await self.mongo["candles"].insert_one({
+            **candle,
+            "timestamp": candle["bucket_start"]
+        })
+
+    async def flush_all(self):
+        async with self.lock:
+            for market in self.active_candles:
+                for symbol in self.active_candles[market]:
+                    for tf in self.active_candles[market][symbol]:
+                        candle = self.active_candles[market][symbol][tf]
+                        await self._finalize_candle(candle)

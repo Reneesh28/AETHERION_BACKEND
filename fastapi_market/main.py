@@ -23,11 +23,11 @@ from fastapi_market.stream_status import stream_status
 from fastapi_market.feature_engine import FeatureEngine
 from fastapi_market.regime_poller import poll_regime
 from fastapi_market.regime_ws import regime_manager
-from fastapi_market.candle_engine import CandleEngine   # ✅ NEW IMPORT
+from fastapi_market.candle_engine import MultiTimeframeCandleEngine  # ✅ NEW IMPORT
 
 
 feature_engine = FeatureEngine()
-candle_engine = CandleEngine()  # ✅ NEW INSTANCE
+candle_engine = MultiTimeframeCandleEngine()
 
 
 CRYPTO_MARKETS = [{"type": MarketType.CRYPTO, "symbol": "btcusdt"}]

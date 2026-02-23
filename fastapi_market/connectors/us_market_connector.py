@@ -5,7 +5,6 @@ import logging
 import websockets
 from datetime import datetime, timezone
 from dotenv import load_dotenv
-
 from fastapi_market.connectors.base_connector import BaseMarketConnector
 from fastapi_market.schemas import unified_trade_schema
 from fastapi_market.database import trade_collection
