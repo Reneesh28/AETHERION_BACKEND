@@ -1,7 +1,15 @@
 from typing import List, Dict
 
 
+# ==========================================
+# SUPPORTED MARKET TYPES
+# ==========================================
+SUPPORTED_MARKETS = {"CRYPTO", "NASDAQ", "NYSE"}
+
+
+# ==========================================
 # INTERNAL UNIFIED TRADE SCHEMA
+# ==========================================
 def unified_trade_schema(
     market_type: str,
     symbol: str,
@@ -12,17 +20,23 @@ def unified_trade_schema(
     receive_timestamp: int
 ) -> Dict:
 
+    if market_type not in SUPPORTED_MARKETS:
+        raise ValueError(f"Unsupported market_type: {market_type}")
+
     return {
-        "market_type": market_type,        # CRYPTO | US_STOCK | NSE
-        "symbol": symbol,                  # BTCUSDT | NASDAQ:AAPL | NSE:RELIANCE
-        "price": price,
-        "quantity": quantity,
+        "market_type": market_type,        # CRYPTO | NASDAQ | NYSE
+        "symbol": symbol,                  # BTCUSDT | NASDAQ:AAPL | NYSE:IBM
+        "price": float(price),
+        "quantity": float(quantity),
         "side": side,                      # BUY | SELL
         "exchange_timestamp": exchange_timestamp,
         "receive_timestamp": receive_timestamp
     }
 
+
+# ==========================================
 # INTERNAL UNIFIED ORDERBOOK SCHEMA
+# ==========================================
 def unified_orderbook_schema(
     market_type: str,
     symbol: str,
@@ -31,6 +45,9 @@ def unified_orderbook_schema(
     exchange_timestamp: int,
     receive_timestamp: int
 ) -> Dict:
+
+    if market_type not in SUPPORTED_MARKETS:
+        raise ValueError(f"Unsupported market_type: {market_type}")
 
     return {
         "market_type": market_type,

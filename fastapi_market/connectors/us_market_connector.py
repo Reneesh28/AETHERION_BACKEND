@@ -5,6 +5,7 @@ import logging
 import websockets
 from datetime import datetime, timezone
 from dotenv import load_dotenv
+
 from fastapi_market.connectors.base_connector import BaseMarketConnector
 from fastapi_market.schemas import unified_trade_schema
 from fastapi_market.database import trade_collection
@@ -17,10 +18,20 @@ logger = logging.getLogger("us_market_connector")
 
 class USMarketConnector(BaseMarketConnector):
     """
-    Single WebSocket US connector (multi-symbol)
+    Unified US Market WebSocket Connector
+    Supports NASDAQ + NYSE (multi-symbol)
     """
 
     def __init__(self, symbols: list[str]):
+        """
+        symbols format:
+        [
+            "NASDAQ:AAPL",
+            "NASDAQ:MSFT",
+            "NYSE:JPM",
+            "NYSE:KO"
+        ]
+        """
         super().__init__("US_MULTI")
 
         self.symbols = symbols
@@ -31,10 +42,10 @@ class USMarketConnector(BaseMarketConnector):
 
         self.reconnect_delay = 5
 
-        self.tickers = [
-            s.split(":")[1] for s in symbols
-        ]
+        # Extract tickers only (AAPL, MSFT, etc.)
+        self.tickers = [s.split(":")[1] for s in symbols]
 
+        # Map ticker -> exchange
         self.exchange_map = {
             s.split(":")[1]: s.split(":")[0]
             for s in symbols
@@ -45,7 +56,7 @@ class USMarketConnector(BaseMarketConnector):
         while True:
             try:
                 logger.info(
-                    f"🔌 Connecting to Alpaca trade stream for {self.tickers}..."
+                    f"🔌 Connecting to Alpaca trade stream for {self.tickers}"
                 )
 
                 async with websockets.connect(
@@ -54,6 +65,7 @@ class USMarketConnector(BaseMarketConnector):
                     ping_timeout=20
                 ) as ws:
 
+                    # Authenticate
                     auth_msg = {
                         "action": "auth",
                         "key": self.api_key,
@@ -66,16 +78,14 @@ class USMarketConnector(BaseMarketConnector):
 
                     logger.info("✅ Authenticated with Alpaca")
 
+                    # Subscribe to trades
                     sub_msg = {
                         "action": "subscribe",
                         "trades": self.tickers
                     }
 
                     await ws.send(json.dumps(sub_msg))
-
-                    logger.info(
-                        f"📡 Subscribed to {self.tickers}"
-                    )
+                    logger.info(f"📡 Subscribed to {self.tickers}")
 
                     async for message in ws:
 
@@ -88,18 +98,26 @@ class USMarketConnector(BaseMarketConnector):
 
                                 await trade_collection.insert_one(normalized)
 
+                                # Update status per exchange
+                                exchange = normalized["symbol"].split(":")[0]
+
                                 update_status(
-                                    "US_STOCK",
+                                    exchange,
                                     normalized["price"]
                                 )
 
             except Exception as e:
-                set_disconnected("US_STOCK")
                 logger.error(f"❌ US trade stream error: {e}")
+
+                # Mark each exchange disconnected
+                for exchange in set(self.exchange_map.values()):
+                    set_disconnected(exchange)
+
                 await asyncio.sleep(self.reconnect_delay)
 
     async def start_orderbook_stream(self):
-        pass
+        # Alpaca basic feed does not provide full L2 orderbook
+        return
 
     def normalize_trade(self, raw):
 
@@ -117,11 +135,11 @@ class USMarketConnector(BaseMarketConnector):
         exchange = self.exchange_map.get(ticker, "US")
 
         return unified_trade_schema(
-            market_type="US_STOCK",
+            market_type=exchange,  # NASDAQ or NYSE
             symbol=f"{exchange}:{ticker}",
             price=float(raw["p"]),
             quantity=float(raw["s"]),
-            side="BUY",
+            side="BUY",  # Alpaca trade feed doesn't expose aggressor side
             exchange_timestamp=exchange_ts,
             receive_timestamp=receive_time
         )
