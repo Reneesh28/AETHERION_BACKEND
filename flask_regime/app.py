@@ -6,6 +6,10 @@ from pymongo import MongoClient
 
 app = Flask(__name__)
 
+# ==============================
+# CONFIG
+# ==============================
+
 MONGO_URI = "mongodb://localhost:27017"
 DB_NAME = "aetherion"
 
@@ -14,9 +18,12 @@ FEATURE_COLS = [
     "atr",
     "volume_delta"
 ]
-TIMEFRAMES = ["1m", "5m", "15m", "1h"]
+
+TIMEFRAMES = ["1m", "5m"]  # Fast Completion Mode
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.path.join(BASE_DIR, "models")
+
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 collection = db["market_features"]
@@ -24,6 +31,9 @@ collection = db["market_features"]
 MODEL_CACHE = {}
 
 
+# ==============================
+# MODEL LOADER
+# ==============================
 def load_model(timeframe):
     if timeframe in MODEL_CACHE:
         return MODEL_CACHE[timeframe]
@@ -31,22 +41,31 @@ def load_model(timeframe):
     try:
         model_path = os.path.join(
             MODEL_DIR,
-            f"regime_crypto_{timeframe}.pkl"
+            f"crypto_{timeframe}_hmm.pkl"
         )
         scaler_path = os.path.join(
             MODEL_DIR,
-            f"scaler_crypto_{timeframe}.pkl"
+            f"crypto_{timeframe}_scaler.pkl"
+        )
+        mapping_path = os.path.join(
+            MODEL_DIR,
+            f"crypto_{timeframe}_mapping.pkl"
         )
 
         model = joblib.load(model_path)
         scaler = joblib.load(scaler_path)
+        mapping = joblib.load(mapping_path)
 
-        MODEL_CACHE[timeframe] = (model, scaler)
-        return model, scaler
+        MODEL_CACHE[timeframe] = (model, scaler, mapping)
+        return model, scaler, mapping
 
     except Exception:
-        return None, None
+        return None, None, None
 
+
+# ==============================
+# REGIME DETECTION
+# ==============================
 @app.route("/detect_regime", methods=["POST"])
 def detect_regime():
 
@@ -65,7 +84,7 @@ def detect_regime():
 
     for timeframe in TIMEFRAMES:
 
-        model, scaler = load_model(timeframe)
+        model, scaler, mapping = load_model(timeframe)
 
         if model is None:
             results[timeframe] = {
@@ -115,8 +134,16 @@ def detect_regime():
         states = model.predict(X_scaled)
         current_state = int(states[-1])
 
+        # Confidence
+        probs = model.predict_proba(X_scaled)
+        confidence = float(probs[-1][current_state])
+
+        regime_label = mapping.get(current_state, "Unknown")
+
         results[timeframe] = {
-            "state": current_state
+            "state": current_state,
+            "regime": regime_label,
+            "confidence": round(confidence, 4)
         }
 
     return jsonify({

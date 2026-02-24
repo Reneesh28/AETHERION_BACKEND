@@ -18,11 +18,15 @@ class RegimeTrainer:
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
 
-    def train(self, market, symbol, model_name, limit=10000):
+    def train(self, market, symbol, timeframe, model_name, limit=10000):
 
         cursor = (
             self.collection
-            .find({"market": market, "symbol": symbol})
+            .find({
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe
+            })
             .sort("timestamp", 1)
             .limit(limit)
         )
@@ -34,28 +38,27 @@ class RegimeTrainer:
 
         df = pd.DataFrame(data)
 
+        # ✅ Candle-based features only
         feature_cols = [
-            "log_return",
             "rolling_volatility",
             "atr",
-            "volume_delta",
-            "spread"
+            "volume_delta"
         ]
 
         df = df[feature_cols].dropna()
 
-        if len(df) < 500:
+        if len(df) < 50:
             raise ValueError("Not enough data to train HMM.")
 
         X = df.values
 
-        # 🔹 Scale Features
+        # Scale
         scaler = FeatureScaler()
         X_scaled = scaler.fit_transform(X)
 
-        # 🔹 Train HMM
+        # ✅ 3 regimes only
         model = GaussianHMM(
-            n_components=4,
+            n_components=3,
             covariance_type="full",
             n_iter=300,
             random_state=42,
@@ -64,52 +67,32 @@ class RegimeTrainer:
 
         model.fit(X_scaled)
 
-        # 🔹 Predict Hidden States
         hidden_states = model.predict(X_scaled)
         df["state"] = hidden_states
 
-        # 🔹 Compute Statistics Per State
+        # Identify regimes by volatility
         state_stats = df.groupby("state").agg({
-            "log_return": "mean",
-            "rolling_volatility": "mean",
-            "atr": "mean"
+            "rolling_volatility": "mean"
         }).reset_index()
 
-        print("\nState Statistics:")
-        print(state_stats)
+        sorted_states = state_stats.sort_values("rolling_volatility")
 
-        # 🔹 Identify States
+        low_vol_state = sorted_states.iloc[0]["state"]
+        high_vol_state = sorted_states.iloc[-1]["state"]
 
-        # Sort by volatility
-        sorted_by_vol = state_stats.sort_values("rolling_volatility")
-
-        sideways_state = sorted_by_vol.iloc[0]["state"]
-        crisis_state = sorted_by_vol.iloc[-1]["state"]
-
-        # Remaining states
-        remaining_states = state_stats[
-            ~state_stats["state"].isin([sideways_state, crisis_state])
+        remaining = state_stats[
+            ~state_stats["state"].isin([low_vol_state, high_vol_state])
         ]
 
-        bull_state = remaining_states.sort_values(
-            "log_return", ascending=False
-        ).iloc[0]["state"]
-
-        bear_state = remaining_states.sort_values(
-            "log_return"
-        ).iloc[0]["state"]
+        mid_state = remaining.iloc[0]["state"]
 
         state_mapping = {
-            int(bull_state): "Bull",
-            int(bear_state): "Bear",
-            int(sideways_state): "Sideways",
-            int(crisis_state): "Crisis"
+            int(low_vol_state): "Sideways",
+            int(mid_state): "Bull",
+            int(high_vol_state): "Crisis"
         }
 
-        print("\nState Mapping:")
-        print(state_mapping)
-
-        # 🔹 Save Model, Scaler, Mapping
+        # Save
         model_path = os.path.join(self.model_dir, f"{model_name}_hmm.pkl")
         scaler_path = os.path.join(self.model_dir, f"{model_name}_scaler.pkl")
         mapping_path = os.path.join(self.model_dir, f"{model_name}_mapping.pkl")
@@ -118,14 +101,18 @@ class RegimeTrainer:
         scaler.save(scaler_path)
         joblib.dump(state_mapping, mapping_path)
 
-        print("\nTraining completed successfully.")
-        print("Transition Matrix:")
-        print(model.transmat_)
+        print("Training completed successfully.")
+        print("State mapping:", state_mapping)
 
-        return {
-            "model_path": model_path,
-            "scaler_path": scaler_path,
-            "mapping_path": mapping_path,
-            "transition_matrix": model.transmat_,
-            "state_mapping": state_mapping
-        }
+        return state_mapping
+
+
+if __name__ == "__main__":
+    trainer = RegimeTrainer("mongodb://localhost:27017", "aetherion")
+
+    trainer.train(
+        market="CRYPTO",
+        symbol="BTCUSDT",
+        timeframe="1m",
+        model_name="crypto_1m"
+    )
