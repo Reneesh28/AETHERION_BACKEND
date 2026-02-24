@@ -6,17 +6,46 @@ from pymongo import MongoClient
 
 app = Flask(__name__)
 
-
 MONGO_URI = "mongodb://localhost:27017"
 DB_NAME = "aetherion"
 
+FEATURE_COLS = [
+    "rolling_volatility",
+    "atr",
+    "volume_delta"
+]
+TIMEFRAMES = ["1m", "5m", "15m", "1h"]
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(BASE_DIR, "models")
 client = MongoClient(MONGO_URI)
 db = client[DB_NAME]
 collection = db["market_features"]
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, "models")
+MODEL_CACHE = {}
 
+
+def load_model(timeframe):
+    if timeframe in MODEL_CACHE:
+        return MODEL_CACHE[timeframe]
+
+    try:
+        model_path = os.path.join(
+            MODEL_DIR,
+            f"regime_crypto_{timeframe}.pkl"
+        )
+        scaler_path = os.path.join(
+            MODEL_DIR,
+            f"scaler_crypto_{timeframe}.pkl"
+        )
+
+        model = joblib.load(model_path)
+        scaler = joblib.load(scaler_path)
+
+        MODEL_CACHE[timeframe] = (model, scaler)
+        return model, scaler
+
+    except Exception:
+        return None, None
 
 @app.route("/detect_regime", methods=["POST"])
 def detect_regime():
@@ -28,76 +57,72 @@ def detect_regime():
 
     market = request_data.get("market")
     symbol = request_data.get("symbol")
-    model_name = request_data.get("model_name")
 
-    if not market or not symbol or not model_name:
+    if not market or not symbol:
         return jsonify({"error": "Missing parameters"}), 400
 
-    try:
-        model = joblib.load(
-            os.path.join(MODEL_DIR, f"{model_name}_hmm.pkl")
+    results = {}
+
+    for timeframe in TIMEFRAMES:
+
+        model, scaler = load_model(timeframe)
+
+        if model is None:
+            results[timeframe] = {
+                "error": "Model not available"
+            }
+            continue
+
+        cursor = (
+            collection
+            .find({
+                "market": market,
+                "symbol": symbol,
+                "timeframe": timeframe
+            })
+            .sort("timestamp", -1)
+            .limit(200)
         )
 
-        scaler = joblib.load(
-            os.path.join(MODEL_DIR, f"{model_name}_scaler.pkl")
-        )
+        data = list(cursor)
 
-        mapping = joblib.load(
-            os.path.join(MODEL_DIR, f"{model_name}_mapping.pkl")
-        )
+        if not data:
+            results[timeframe] = {
+                "error": "No data"
+            }
+            continue
 
-    except Exception as e:
-        return jsonify({
-            "error": f"Model load failed: {str(e)}"
-        }), 500
-    
-    cursor = (
-        collection
-        .find({"market": market, "symbol": symbol})
-        .sort("timestamp", -1)
-        .limit(200)
-    )
+        df = pd.DataFrame(data)
+        df = df.sort_values("timestamp")
 
-    data = list(cursor)
+        if not all(col in df.columns for col in FEATURE_COLS):
+            results[timeframe] = {
+                "error": "Feature mismatch"
+            }
+            continue
 
-    if not data:
-        return jsonify({"error": "No feature data found"}), 404
+        df = df[FEATURE_COLS].dropna()
 
-    df = pd.DataFrame(data)
+        if len(df) < 20:
+            results[timeframe] = {
+                "error": "Not enough data"
+            }
+            continue
 
-    # 🔥 Important: Chronological Order
-    df = df.sort_values("timestamp")
+        X = df.values
+        X_scaled = scaler.transform(X)
 
-    feature_cols = [
-        "log_return",
-        "rolling_volatility",
-        "atr",
-        "volume_delta",
-        "spread"
-    ]
+        states = model.predict(X_scaled)
+        current_state = int(states[-1])
 
-    df = df[feature_cols].dropna()
-
-    if len(df) < 20:
-        return jsonify({"error": "Not enough data for inference"}), 400
-
-    X = df.values
-    X_scaled = scaler.transform(X)
-    hidden_states = model.predict(X_scaled)
-
-    current_state = int(hidden_states[-1])
-    regime_label = mapping[current_state]
-
-    # Confidence Score
-    state_probs = model.predict_proba(X_scaled)
-    confidence = float(state_probs[-1][current_state])
+        results[timeframe] = {
+            "state": current_state
+        }
 
     return jsonify({
         "market": market,
         "symbol": symbol,
-        "regime": regime_label,
-        "confidence": round(confidence, 4),
-        "state": current_state
+        "regimes": results
     })
 
 

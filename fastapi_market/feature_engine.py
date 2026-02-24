@@ -1,7 +1,7 @@
 import numpy as np
 from collections import deque, defaultdict
 from datetime import datetime
-WINDOW_SIZE = 20
+WINDOW_SIZE = 5
 
 
 class FeatureEngine:

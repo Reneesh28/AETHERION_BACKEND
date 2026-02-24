@@ -24,7 +24,7 @@ MYSQL_CONFIG = {
 POLL_INTERVAL = 10
 CONFIDENCE_THRESHOLD = 0.60
 
-TIMEFRAMES = ["1m", "5m", "15m", "1h"]
+TIMEFRAMES = ["1m", "5m", "15m"]
 
 STABILITY_WINDOW = 5
 MIN_CONFIRMATIONS = 3
@@ -98,30 +98,40 @@ async def poll_regime():
             try:
                 async with httpx.AsyncClient() as client:
 
+                    payload = {
+                        "market": "CRYPTO",
+                        "symbol": "BTCUSDT"
+                    }
+
+                    response = await client.post(
+                        FLASK_REGIME_URL,
+                        json=payload,
+                        timeout=10
+                    )
+
+                    if response.status_code != 200:
+                        await asyncio.sleep(POLL_INTERVAL)
+                        continue
+
+                    data = response.json()
+
+                    regimes = data.get("regimes", {})
+
                     # ============================
                     # 1️⃣ TIMEFRAME REGIMES
                     # ============================
                     for tf in TIMEFRAMES:
 
-                        payload = {
-                            "market": "CRYPTO",
-                            "symbol": "BTCUSDT",
-                            "model_name": f"crypto_{tf}"
-                        }
+                        tf_data = regimes.get(tf)
 
-                        response = await client.post(
-                            FLASK_REGIME_URL,
-                            json=payload,
-                            timeout=10
-                        )
-
-                        if response.status_code != 200:
+                        if not tf_data:
                             continue
 
-                        data = response.json()
+                        if "error" in tf_data:
+                            continue
 
-                        state = data["state"]
-                        confidence = data["confidence"]
+                        state = tf_data["state"]
+                        confidence = tf_data["confidence"]
 
                         if confidence < CONFIDENCE_THRESHOLD:
                             continue
@@ -138,8 +148,12 @@ async def poll_regime():
                             insert_timeframe_regime(
                                 cursor,
                                 conn,
-                                data,
-                                timeframe=tf
+                                data["market"],
+                                data["symbol"],
+                                tf,
+                                tf_data["regime"],
+                                confidence,
+                                confirmed_state
                             )
 
                             await regime_manager.broadcast({
@@ -147,16 +161,13 @@ async def poll_regime():
                                 "market": data["market"],
                                 "symbol": data["symbol"],
                                 "timeframe": tf,
-                                "regime": data["regime"],
+                                "regime": tf_data["regime"],
                                 "confidence": confidence,
                                 "state": confirmed_state,
                                 "timestamp": datetime.utcnow().isoformat()
                             })
 
-                            print(
-                                f"🔒 {tf} Stable Regime → "
-                                f"{data['regime']}"
-                            )
+                            print(f"🔒 {tf} Stable Regime → {tf_data['regime']}")
 
                             stable_state[tf] = confirmed_state
 
@@ -223,7 +234,8 @@ async def poll_regime():
 # =========================================
 # INSERT FUNCTIONS
 # =========================================
-def insert_timeframe_regime(cursor, conn, data, timeframe):
+def insert_timeframe_regime(cursor, conn, market, symbol,
+                            timeframe, regime, confidence, state):
 
     query = """
     INSERT INTO regime_state
@@ -232,12 +244,12 @@ def insert_timeframe_regime(cursor, conn, data, timeframe):
     """
 
     values = (
-        data["market"],
-        data["symbol"],
+        market,
+        symbol,
         timeframe,
-        data["regime"],
-        data["confidence"],
-        data["state"],
+        regime,
+        confidence,
+        state,
         datetime.utcnow()
     )
 
