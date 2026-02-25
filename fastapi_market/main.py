@@ -25,10 +25,8 @@ from fastapi_market.stream_status import stream_status
 from fastapi_market.regime_poller import poll_regime
 from fastapi_market.regime_ws import regime_manager
 from fastapi_market.candle_engine import MultiTimeframeCandleEngine
-
-# 🔥 NEW: Import service registration function
 from fastapi_market.service import register_candle_engine
-
+from fastapi_market.decision_ws import decision_manager
 
 # =====================================================
 # INITIALIZE ENGINES
@@ -132,7 +130,6 @@ def root():
 @app.get("/api/market/status")
 async def market_status():
     return stream_status
-
 
 @app.get("/api/market/active")
 async def active_markets():
@@ -256,3 +253,50 @@ async def regime_websocket(websocket: WebSocket):
             await asyncio.sleep(60)
     except:
         regime_manager.disconnect(websocket)
+
+# =====================================================
+# DECISION API
+# =====================================================
+@app.get("/api/decision/latest")
+async def get_latest_decision():
+
+    import mysql.connector
+    from fastapi_market.regime_poller import MYSQL_CONFIG
+
+    try:
+        conn = mysql.connector.connect(**MYSQL_CONFIG)
+        cursor = conn.cursor(dictionary=True)
+
+        query = """
+        SELECT market, symbol, meta_regime, strategy,
+               action, confidence, created_at
+        FROM decisions
+        ORDER BY created_at DESC
+        LIMIT 1
+        """
+
+        cursor.execute(query)
+        result = cursor.fetchone()
+
+        cursor.close()
+        conn.close()
+
+        if not result:
+            return {"message": "No decisions available yet."}
+
+        return result
+
+    except Exception as e:
+        return {"error": str(e)}
+
+# =====================================================
+# DECISION WEBSOCKET
+# =====================================================
+@app.websocket("/ws/decision")
+async def decision_websocket(websocket: WebSocket):
+    await decision_manager.connect(websocket)
+    try:
+        while True:
+            await asyncio.sleep(60)
+    except:
+        decision_manager.disconnect(websocket)

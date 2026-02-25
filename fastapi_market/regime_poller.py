@@ -7,6 +7,8 @@ from collections import deque
 from fastapi_market.regime_ws import regime_manager
 from fastapi_market.regime_fusion import RegimeFusion
 from fastapi_market.strategy_engine import StrategyEngine
+from fastapi_market.decision_engine import generate_decision
+from fastapi_market.decision_ws import decision_manager   # ✅ NEW
 
 
 FLASK_REGIME_URL = "http://127.0.0.1:5001/detect_regime"
@@ -18,20 +20,11 @@ MYSQL_CONFIG = {
     "database": "aetherion"
 }
 
-# =========================================
-# CONFIGURATION
-# =========================================
 POLL_INTERVAL = 10
-CONFIDENCE_THRESHOLD = 0.60
-
 TIMEFRAMES = ["1m", "5m", "15m"]
-
 STABILITY_WINDOW = 5
 MIN_CONFIRMATIONS = 3
 
-# =========================================
-# STABILITY STATE
-# =========================================
 state_buffers = {
     tf: deque(maxlen=STABILITY_WINDOW)
     for tf in TIMEFRAMES
@@ -39,9 +32,6 @@ state_buffers = {
 
 stable_state = {tf: None for tf in TIMEFRAMES}
 
-# =========================================
-# FUSION + STRATEGY
-# =========================================
 fusion_engine = RegimeFusion()
 strategy_engine = StrategyEngine()
 
@@ -114,30 +104,21 @@ async def poll_regime():
                         continue
 
                     data = response.json()
-
                     regimes = data.get("regimes", {})
 
-                    # ============================
-                    # 1️⃣ TIMEFRAME REGIMES
-                    # ============================
+                    # =====================================
+                    # 1️⃣ TIMEFRAME STABILITY
+                    # =====================================
                     for tf in TIMEFRAMES:
 
                         tf_data = regimes.get(tf)
-
-                        if not tf_data:
-                            continue
-
-                        if "error" in tf_data:
+                        if not tf_data or "error" in tf_data:
                             continue
 
                         state = tf_data["state"]
                         confidence = tf_data["confidence"]
 
-                        if confidence < CONFIDENCE_THRESHOLD:
-                            continue
-
                         state_buffers[tf].append(state)
-
                         confirmed_state = evaluate_stability(tf)
 
                         if confirmed_state is None:
@@ -168,15 +149,19 @@ async def poll_regime():
                             })
 
                             print(f"🔒 {tf} Stable Regime → {tf_data['regime']}")
-
                             stable_state[tf] = confirmed_state
 
-                    # ============================
-                    # 2️⃣ FUSION LAYER
-                    # ============================
+                    # =====================================
+                    # 2️⃣ META FUSION
+                    # =====================================
                     meta = fusion_engine.fuse(stable_state)
 
-                    if meta and meta["meta_regime"] != last_meta_regime:
+                    if not meta:
+                        await asyncio.sleep(POLL_INTERVAL)
+                        continue
+
+                    # Insert only if meta regime changed
+                    if meta["meta_regime"] != last_meta_regime:
 
                         insert_meta_regime(cursor, conn, meta)
 
@@ -189,35 +174,62 @@ async def poll_regime():
                         })
 
                         print(f"🧠 META REGIME → {meta['meta_regime']}")
-
                         last_meta_regime = meta["meta_regime"]
 
-                        # ============================
-                        # 3️⃣ STRATEGY SWITCHING
-                        # ============================
-                        strategy_data = strategy_engine.select_strategy(meta)
+                    # =====================================
+                    # 3️⃣ STRATEGY SWITCHING
+                    # =====================================
+                    strategy_data = strategy_engine.select_strategy(meta)
 
-                        if strategy_data:
-                            strategy_name = strategy_data["strategy"]
+                    if strategy_data:
+                        strategy_name = strategy_data["strategy"]
 
-                            if strategy_name != last_strategy:
+                        if strategy_name != last_strategy:
 
-                                insert_strategy_state(
-                                    cursor,
-                                    conn,
-                                    strategy_data
-                                )
+                            insert_strategy_state(
+                                cursor,
+                                conn,
+                                strategy_data
+                            )
 
-                                await regime_manager.broadcast({
-                                    "type": "strategy",
-                                    "meta_regime": strategy_data["meta_regime"],
-                                    "strategy": strategy_name,
-                                    "timestamp": datetime.utcnow().isoformat()
-                                })
+                            await regime_manager.broadcast({
+                                "type": "strategy",
+                                "meta_regime": strategy_data["meta_regime"],
+                                "strategy": strategy_name,
+                                "timestamp": datetime.utcnow().isoformat()
+                            })
 
-                                print(f"🎯 Strategy Switched → {strategy_name}")
+                            print(f"🎯 Strategy Switched → {strategy_name}")
+                            last_strategy = strategy_name
 
-                                last_strategy = strategy_name
+                    # =====================================
+                    # 4️⃣ DECISION ENGINE (Event Driven)
+                    # =====================================
+                    decision = generate_decision(
+                        market=data["market"],
+                        symbol=data["symbol"],
+                        meta_regime=meta["meta_regime"],
+                        strategy=last_strategy,
+                        confidence=meta["confidence"]
+                    )
+
+                    if decision:
+
+                        insert_decision(cursor, conn, decision)
+
+                        # ✅ Broadcast decision event
+                        await decision_manager.broadcast({
+                            "type": "decision",
+                            "market": decision.market,
+                            "symbol": decision.symbol,
+                            "meta_regime": decision.meta_regime,
+                            "strategy": decision.strategy,
+                            "action": decision.action,
+                            "confidence": decision.confidence,
+                            "timestamp": decision.timestamp.isoformat()
+                        })
+
+                        print(f"📈 Decision Generated → {decision.action} ({decision.strategy})")
 
             except Exception as e:
                 print("❌ Polling Error:", e)
@@ -234,6 +246,7 @@ async def poll_regime():
 # =========================================
 # INSERT FUNCTIONS
 # =========================================
+
 def insert_timeframe_regime(cursor, conn, market, symbol,
                             timeframe, regime, confidence, state):
 
@@ -287,6 +300,28 @@ def insert_strategy_state(cursor, conn, strategy_data):
         strategy_data["meta_regime"],
         strategy_data["strategy"],
         datetime.utcnow()
+    )
+
+    cursor.execute(query, values)
+    conn.commit()
+
+
+def insert_decision(cursor, conn, decision):
+
+    query = """
+    INSERT INTO decisions
+    (market, symbol, meta_regime, strategy, action, confidence, created_at)
+    VALUES (%s, %s, %s, %s, %s, %s, %s)
+    """
+
+    values = (
+        decision.market,
+        decision.symbol,
+        decision.meta_regime,
+        decision.strategy,
+        decision.action,
+        decision.confidence,
+        decision.timestamp
     )
 
     cursor.execute(query, values)
