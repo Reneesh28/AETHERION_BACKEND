@@ -9,7 +9,6 @@ load_dotenv()
 from fastapi import FastAPI, WebSocket
 import asyncio
 from contextlib import asynccontextmanager
-
 from fastapi_market.simulator import MarketSimulator
 from fastapi_market.database import (
     db,
@@ -27,30 +26,16 @@ from fastapi_market.regime_ws import regime_manager
 from fastapi_market.candle_engine import MultiTimeframeCandleEngine
 from fastapi_market.service import register_candle_engine
 from fastapi_market.decision_ws import decision_manager
-
-# =====================================================
-# INITIALIZE ENGINES
-# =====================================================
-
+from fastapi_market.position_engine import PositionEngine
 candle_engine = MultiTimeframeCandleEngine(db)
-
-# 🔥 Inject candle engine into service layer (fix circular import)
 register_candle_engine(candle_engine)
-
-
 CRYPTO_MARKETS = [{"type": MarketType.CRYPTO, "symbol": "btcusdt"}]
-
 US_SYMBOLS = [
     "NASDAQ:TSLA",
     "NYSE:IBM"
 ]
-
 DATA_MODE = "LIVE"
 
-
-# =====================================================
-# LIFESPAN
-# =====================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 
@@ -59,9 +44,6 @@ async def lifespan(app: FastAPI):
 
     if DATA_MODE == "LIVE":
 
-        # ----------------------------
-        # CRYPTO CONNECTOR
-        # ----------------------------
         for market in CRYPTO_MARKETS:
             connector = get_connector(
                 market["type"],
@@ -77,27 +59,18 @@ async def lifespan(app: FastAPI):
                     asyncio.create_task(connector.start_orderbook_stream())
                 )
 
-        # ----------------------------
-        # US CONNECTOR
-        # ----------------------------
         us_connector = USMarketConnector(US_SYMBOLS)
 
         tasks.append(
             asyncio.create_task(us_connector.start_trade_stream())
         )
 
-        # ----------------------------
-        # REGIME POLLER
-        # ----------------------------
         tasks.append(
             asyncio.create_task(poll_regime())
         )
 
     yield
 
-    # =================================================
-    # 🔥 CLEAN SHUTDOWN
-    # =================================================
     print("⚠️ Shutting down AETHERION Engine...")
 
     try:
@@ -113,19 +86,11 @@ async def lifespan(app: FastAPI):
 
     print("🛑 All background tasks stopped.")
 
-
 app = FastAPI(lifespan=lifespan)
-
 simulator = MarketSimulator()
-
-
-# =====================================================
-# BASIC ENDPOINTS
-# =====================================================
 @app.get("/")
 def root():
     return {"status": "AETHERION Multi-Market Engine Running"}
-
 
 @app.get("/api/market/status")
 async def market_status():
@@ -139,10 +104,6 @@ async def active_markets():
         "nyse": [s for s in US_SYMBOLS if s.startswith("NYSE")]
     }
 
-
-# =====================================================
-# SNAPSHOT
-# =====================================================
 @app.get("/api/market/snapshot/{market}")
 async def market_snapshot(market: str):
 
@@ -161,10 +122,6 @@ async def market_snapshot(market: str):
 
     return {"data": latest}
 
-
-# =====================================================
-# TRADES
-# =====================================================
 @app.get("/api/market/trades/{market}")
 async def get_trades(market: str):
 
@@ -184,10 +141,6 @@ async def get_trades(market: str):
 
     return {"trades": data}
 
-
-# =====================================================
-# ORDERBOOK
-# =====================================================
 @app.get("/api/market/orderbook/{market}")
 async def get_orderbook(market: str):
 
@@ -211,10 +164,6 @@ async def get_orderbook(market: str):
 
     return {"orderbook": latest}
 
-
-# =====================================================
-# FEATURES
-# =====================================================
 @app.get("/api/market/features/{market}")
 async def get_features(market: str, limit: int = 50):
 
@@ -241,10 +190,21 @@ async def get_features(market: str, limit: int = 50):
         "features": data
     }
 
+@app.post("/api/position/size")
+async def size_position(payload: dict):
 
-# =====================================================
-# REGIME WEBSOCKET
-# =====================================================
+    price = payload["price"]
+    atr = payload["atr"]
+    risk_config = payload["risk_config"]
+
+    result = PositionEngine.size_position(
+        price=price,
+        atr=atr,
+        risk_config=risk_config
+    )
+
+    return result
+
 @app.websocket("/ws/regime")
 async def regime_websocket(websocket: WebSocket):
     await regime_manager.connect(websocket)
@@ -254,9 +214,6 @@ async def regime_websocket(websocket: WebSocket):
     except:
         regime_manager.disconnect(websocket)
 
-# =====================================================
-# DECISION API
-# =====================================================
 @app.get("/api/decision/latest")
 async def get_latest_decision():
 
@@ -289,9 +246,6 @@ async def get_latest_decision():
     except Exception as e:
         return {"error": str(e)}
 
-# =====================================================
-# DECISION WEBSOCKET
-# =====================================================
 @app.websocket("/ws/decision")
 async def decision_websocket(websocket: WebSocket):
     await decision_manager.connect(websocket)
