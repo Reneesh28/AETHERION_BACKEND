@@ -3,6 +3,13 @@ from django.http import JsonResponse
 from system.models import Decision
 from system.models import PortfolioSummary, PortfolioPosition
 from system.services.risk_service import RiskService
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
+from system.models import TradeExecution
+from system.serializers import TradeExecutionSerializer
+
+
+
 import requests
 
 FASTAPI_BASE = "http://127.0.0.1:8000"
@@ -10,11 +17,12 @@ FASTAPI_BASE = "http://127.0.0.1:8000"
 def health(request):
     return JsonResponse({"status": "django_core running"})
 
+@api_view(["GET"])
 def get_portfolio_exposure(request):
     summary = PortfolioSummary.objects.first()
 
     if not summary:
-        return JsonResponse({"error": "PortfolioSummary not initialized."}, status=404)
+        return Response({"error": "PortfolioSummary not initialized."}, status=404)
 
     positions = PortfolioPosition.objects.all()
 
@@ -27,7 +35,7 @@ def get_portfolio_exposure(request):
         for p in positions
     ]
 
-    return JsonResponse({
+    return Response({
         "total_capital": summary.total_capital,
         "used_capital": summary.used_capital,
         "free_capital": summary.free_capital,
@@ -35,22 +43,23 @@ def get_portfolio_exposure(request):
         "open_positions": open_positions
     })
 
+@api_view(["GET"])
 def get_portfolio_config(request):
     try:
         config = RiskService.get_config()
-        return JsonResponse(config)
+        return Response(config)
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        return Response({"error": str(e)}, status=500)
 
+@api_view(["GET"])
 def get_enriched_decision(request):
 
     try:
         decision = Decision.objects.order_by("-created_at").first()
 
         if not decision:
-            return JsonResponse({"message": "No decisions available yet."})
+            return Response({"message": "No decisions available yet."})
 
-        # Get latest price from FastAPI
         snapshot_resp = requests.get(
             f"{FASTAPI_BASE}/api/market/snapshot/{decision.market}"
         )
@@ -58,11 +67,9 @@ def get_enriched_decision(request):
         snapshot_data = snapshot_resp.json().get("data")
 
         if not snapshot_data:
-            return JsonResponse({"error": "No market snapshot available."})
+            return Response({"error": "No market snapshot available."})
 
         price = snapshot_data["price"]
-
-        # Placeholder ATR (we replace later with real ATR)
         atr = 10
 
         risk_config = RiskService.get_config()
@@ -90,8 +97,50 @@ def get_enriched_decision(request):
             "preview": True
         }
 
-        return JsonResponse(enriched)
+        return Response(enriched)
 
     except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+        return Response({"error": str(e)}, status=500)
+
+@api_view(["GET"])
+def trade_history(request):
+    trades = TradeExecution.objects.all()
+    serializer = TradeExecutionSerializer(trades, many=True)
+    return Response(serializer.data)
+
+@api_view(["GET"])
+def risk_dashboard(request):
+
+    summary = PortfolioSummary.objects.first()
+
+    if not summary:
+        return Response({"error": "PortfolioSummary not initialized."}, status=404)
+
+    risk_config = RiskService.get_config()
+
+    total_capital = summary.total_capital
+    used_capital = summary.used_capital
+    free_capital = summary.free_capital
+    current_exposure = summary.total_exposure
+
+    max_exposure_allowed = risk_config.get("max_total_exposure", 0)
+    risk_per_trade = risk_config.get("risk_per_trade_amount", 0)
+
+    capital_utilization_percent = (
+        (used_capital / total_capital) * 100
+        if total_capital > 0 else 0
+    )
+
+    remaining_capacity = max_exposure_allowed - current_exposure
+
+    return Response({
+        "total_capital": total_capital,
+        "used_capital": used_capital,
+        "free_capital": free_capital,
+        "capital_utilization_percent": round(capital_utilization_percent, 2),
+        "max_total_exposure_allowed": max_exposure_allowed,
+        "current_total_exposure": current_exposure,
+        "remaining_capacity": remaining_capacity,
+        "risk_per_trade_amount": risk_per_trade,
+    })
 

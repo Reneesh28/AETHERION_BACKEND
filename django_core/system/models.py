@@ -62,3 +62,35 @@ class Decision(models.Model):
     class Meta:
         db_table = "decisions"
         managed = False
+
+class TradeExecution(models.Model):
+    ACTION_CHOICES = [
+        ("BUY", "BUY"),
+        ("SELL", "SELL"),
+    ]
+
+    symbol = models.CharField(max_length=50)
+    action = models.CharField(max_length=4, choices=ACTION_CHOICES)
+    position_size = models.FloatField()
+    price = models.FloatField()
+    capital_allocated = models.FloatField()
+    meta_regime = models.CharField(max_length=50)
+    strategy = models.CharField(max_length=100)
+    executed_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-executed_at"]
+        verbose_name = "Trade Execution"
+        verbose_name_plural = "Trade Executions"
+
+    def delete(self, *args, **kwargs):
+        raise Exception("TradeExecution records are immutable and cannot be deleted.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise Exception("TradeExecution records are immutable and cannot be updated.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.symbol} | {self.action} | {self.position_size} @ {self.price}"
+
