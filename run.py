@@ -27,15 +27,15 @@ if __name__ == "__main__":
     django_dir = os.path.join(base_dir, "django_core")
     flask_dir = os.path.join(base_dir, "flask_regime")
 
-    print("Starting Django on 8001...")
+    print("Starting Django on 8000...")
     processes.append(
         start_service(
-            [python_executable, "manage.py", "runserver", "8001"],
+            [python_executable, "manage.py", "runserver", "8000"],
             django_dir,
         )
     )
 
-    print("Starting FastAPI on 8000...")
+    print("Starting FastAPI on 8001...")
     processes.append(
         start_service(
             [
@@ -45,7 +45,7 @@ if __name__ == "__main__":
                 "fastapi_market.main:app",
                 "--reload",
                 "--port",
-                "8000",
+                "8001",
             ],
             base_dir,
         )

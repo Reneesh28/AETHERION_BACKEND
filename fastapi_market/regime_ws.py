@@ -21,5 +21,4 @@ class RegimeConnectionManager:
             except Exception:
                 pass
 
-
 regime_manager = RegimeConnectionManager()

@@ -40,9 +40,6 @@ class USMarketConnector(BaseMarketConnector):
             for s in symbols
         }
 
-    # =====================================================
-    # TRADE STREAM
-    # =====================================================
     async def start_trade_stream(self):
 
         while True:
@@ -105,9 +102,6 @@ class USMarketConnector(BaseMarketConnector):
     async def start_orderbook_stream(self):
         return
 
-    # =====================================================
-    # NORMALIZATION
-    # =====================================================
     def normalize_trade(self, raw):
 
         receive_time = int(

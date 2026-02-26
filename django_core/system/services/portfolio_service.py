@@ -2,9 +2,7 @@ from django.db import transaction
 from system.models import PortfolioPosition, PortfolioSummary
 from system.services.risk_service import RiskService
 
-
 class PortfolioService:
-
     @staticmethod
     @transaction.atomic
     def update_position(symbol, position_size, price):
@@ -40,7 +38,6 @@ class PortfolioService:
             raise Exception("Insufficient free capital.")
 
         # --- SAFE TO UPDATE ---
-
         position, created = PortfolioPosition.objects.get_or_create(symbol=symbol)
         position.position_size = position_size
         position.average_price = price

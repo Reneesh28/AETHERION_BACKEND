@@ -1,6 +1,5 @@
 from fastapi_market.database import trade_collection
 
-# 🔥 Engine will be injected at startup
 _candle_engine = None
 
 
@@ -17,10 +16,10 @@ async def save_tick(tick):
     Stores raw trade and forwards to CandleEngine.
     """
 
-    # 1️⃣ Store raw trade
+    #  Store raw trade
     result = await trade_collection.insert_one(tick)
 
-    # 2️⃣ Forward to candle engine (if registered)
+    # Forward to candle engine (if registered)
     if _candle_engine is not None:
         tick_for_candle = {
             "market": tick["market_type"],

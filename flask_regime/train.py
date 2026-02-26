@@ -52,11 +52,9 @@ class RegimeTrainer:
 
         X = df.values
 
-        # Scale
         scaler = FeatureScaler()
         X_scaled = scaler.fit_transform(X)
 
-        # ✅ 3 regimes only
         model = GaussianHMM(
             n_components=3,
             covariance_type="full",

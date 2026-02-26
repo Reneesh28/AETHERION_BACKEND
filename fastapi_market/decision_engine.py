@@ -1,13 +1,6 @@
-# fastapi_market/decision_engine.py
-
 from pydantic import BaseModel
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict
-
-
-# =====================================================
-# DECISION MODEL
-# =====================================================
 
 class TradeDecision(BaseModel):
     market: str
@@ -18,18 +11,9 @@ class TradeDecision(BaseModel):
     confidence: float
     timestamp: datetime
 
-
-# =====================================================
-# CONFIGURATION (Can be externalized later)
-# =====================================================
-
 CONFIDENCE_THRESHOLD: float = 0.60
 COOLDOWN_MINUTES: int = 5
 
-
-# =====================================================
-# STRATEGY → ACTION POLICY
-# =====================================================
 
 STRATEGY_ACTION_MAP: Dict[str, str] = {
     "TrendFollowing": "BUY",
@@ -38,18 +22,7 @@ STRATEGY_ACTION_MAP: Dict[str, str] = {
     "Defensive": "HOLD"
 }
 
-
-# =====================================================
-# INTERNAL STATE (In-memory execution guard)
-# =====================================================
-
-# { symbol: {"strategy": str, "timestamp": datetime} }
 _last_decision_cache: Dict[str, Dict] = {}
-
-
-# =====================================================
-# INTERNAL HELPERS
-# =====================================================
 
 def _map_strategy_to_action(strategy: str) -> str:
     return STRATEGY_ACTION_MAP.get(strategy, "HOLD")
@@ -91,11 +64,6 @@ def _update_cache(symbol: str, strategy: str):
         "strategy": strategy,
         "timestamp": datetime.now(timezone.utc)
     }
-
-
-# =====================================================
-# PUBLIC DECISION ENGINE
-# =====================================================
 
 def generate_decision(
     market: str,

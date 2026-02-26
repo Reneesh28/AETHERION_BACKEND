@@ -1,6 +1,5 @@
 from django.db import models
 
-
 class RiskConfiguration(models.Model):
     total_capital = models.FloatField(default=100000)
     risk_per_trade = models.FloatField(default=0.02)

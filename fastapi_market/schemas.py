@@ -1,15 +1,6 @@
 from typing import List, Dict
 
-
-# ==========================================
-# SUPPORTED MARKET TYPES
-# ==========================================
 SUPPORTED_MARKETS = {"CRYPTO", "NASDAQ", "NYSE"}
-
-
-# ==========================================
-# INTERNAL UNIFIED TRADE SCHEMA
-# ==========================================
 def unified_trade_schema(
     market_type: str,
     symbol: str,
@@ -33,10 +24,6 @@ def unified_trade_schema(
         "receive_timestamp": receive_timestamp
     }
 
-
-# ==========================================
-# INTERNAL UNIFIED ORDERBOOK SCHEMA
-# ==========================================
 def unified_orderbook_schema(
     market_type: str,
     symbol: str,

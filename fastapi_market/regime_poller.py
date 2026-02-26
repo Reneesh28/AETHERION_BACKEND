@@ -202,9 +202,6 @@ async def poll_regime():
                             print(f"🎯 Strategy Switched → {strategy_name}")
                             last_strategy = strategy_name
 
-                    # =====================================
-                    # 4️⃣ DECISION ENGINE (Event Driven)
-                    # =====================================
                     decision = generate_decision(
                         market=data["market"],
                         symbol=data["symbol"],
@@ -286,7 +283,6 @@ def insert_meta_regime(cursor, conn, meta):
 
     cursor.execute(query, values)
     conn.commit()
-
 
 def insert_strategy_state(cursor, conn, strategy_data):
 

@@ -36,10 +36,8 @@ class FeatureEngine:
             if len(self.price_buffer[key]) > 0
             else None
         )
-
         self.price_buffer[key].append(close)
         self.volume_buffer[key].append(volume)
-
         if previous_close is not None:
             true_range = max(
                 high - low,
@@ -47,26 +45,19 @@ class FeatureEngine:
                 abs(low - previous_close)
             )
             self.tr_buffer[key].append(true_range)
-
         if len(self.price_buffer[key]) < WINDOW_SIZE:
             return
-
         prices = np.array(self.price_buffer[key])
         volumes = np.array(self.volume_buffer[key])
         tr_values = np.array(self.tr_buffer[key])
-
         log_returns = np.diff(np.log(prices))
-
         rolling_volatility = float(
             np.std(log_returns) * np.sqrt(WINDOW_SIZE)
         ) if len(log_returns) > 1 else 0.0
-
         atr = float(np.mean(tr_values)) if len(tr_values) > 0 else 0.0
-
         volume_delta = float(
             volumes[-1] - volumes[-2]
         ) if len(volumes) > 1 else 0.0
-
         feature_doc = {
             "market": market,
             "symbol": symbol,

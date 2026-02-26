@@ -6,9 +6,6 @@ from pymongo import MongoClient
 
 app = Flask(__name__)
 
-# ==============================
-# CONFIG
-# ==============================
 
 MONGO_URI = "mongodb://localhost:27017"
 DB_NAME = "aetherion"
@@ -31,9 +28,6 @@ collection = db["market_features"]
 MODEL_CACHE = {}
 
 
-# ==============================
-# MODEL LOADER
-# ==============================
 def load_model(timeframe):
     if timeframe in MODEL_CACHE:
         return MODEL_CACHE[timeframe]
@@ -58,14 +52,10 @@ def load_model(timeframe):
 
         MODEL_CACHE[timeframe] = (model, scaler, mapping)
         return model, scaler, mapping
-
     except Exception:
         return None, None, None
 
 
-# ==============================
-# REGIME DETECTION
-# ==============================
 @app.route("/detect_regime", methods=["POST"])
 def detect_regime():
 
@@ -155,3 +145,4 @@ def detect_regime():
 
 if __name__ == "__main__":
     app.run(port=5001, debug=True)
+    

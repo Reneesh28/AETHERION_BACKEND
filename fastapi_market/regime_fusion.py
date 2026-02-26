@@ -24,18 +24,14 @@ class RegimeFusion:
 
         r = stable_regimes
 
-        # -----------------------------------
-        # 1️⃣ Crisis Override
-        # -----------------------------------
+        #Crisis Override
         if r.get("1h") == "CRISIS":
             return self._result("HIGH_VOL_RISK_OFF", r)
 
         if r.get("15m") == "CRISIS" and r.get("5m") == "CRISIS":
             return self._result("HIGH_VOL_RISK_OFF", r)
 
-        # -----------------------------------
-        # 2️⃣ Trending Bull
-        # -----------------------------------
+        # Trending Bull
         if r.get("1h") == "BULL" and r.get("15m") == "BULL":
 
             bullish_count = sum(
@@ -48,9 +44,7 @@ class RegimeFusion:
             if r.get("5m") == "BEAR":
                 return self._result("PULLBACK_IN_UPTREND", r)
 
-        # -----------------------------------
-        # 3️⃣ Trending Bear
-        # -----------------------------------
+        #  Trending Bear
         if r.get("1h") == "BEAR" and r.get("15m") == "BEAR":
 
             bearish_count = sum(
@@ -63,9 +57,7 @@ class RegimeFusion:
             if r.get("5m") == "BULL":
                 return self._result("PULLBACK_IN_DOWNTREND", r)
 
-        # -----------------------------------
-        # 4️⃣ Sideways Majority
-        # -----------------------------------
+        #  Sideways Majority
         sideways_count = sum(
             1 for tf in r if r[tf] == "SIDEWAYS"
         )
@@ -73,9 +65,7 @@ class RegimeFusion:
         if sideways_count >= 3:
             return self._result("RANGE_BOUND", r)
 
-        # -----------------------------------
         # Default Mixed
-        # -----------------------------------
         return self._result("MIXED_CONDITION", r)
 
     def _result(self, meta_regime, regimes):
@@ -96,4 +86,4 @@ class RegimeFusion:
             if regime in ["BULL", "BEAR"]:
                 score += TIMEFRAME_WEIGHTS.get(tf, 0)
 
-        return min(score, 1.0)
+        return min(score, 1.0)  
