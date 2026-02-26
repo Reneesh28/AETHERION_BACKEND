@@ -3,9 +3,9 @@ from .views import health, get_portfolio_exposure, get_portfolio_config, get_enr
 
 urlpatterns = [
     path("health/", health),
-    path("api/portfolio/exposure/", get_portfolio_exposure),
-    path("api/portfolio/config/", get_portfolio_config),
-    path("api/decision/enriched/", get_enriched_decision),
-    path("api/trades/history", trade_history),
-    path("api/risk/dashboard", risk_dashboard),
+    path("portfolio/exposure/", get_portfolio_exposure),
+    path("portfolio/config/", get_portfolio_config),
+    path("decision/enriched/", get_enriched_decision),
+    path("trades/history/", trade_history),
+    path("risk/dashboard/", risk_dashboard),
 ]
