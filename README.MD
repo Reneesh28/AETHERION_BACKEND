@@ -4,45 +4,43 @@
 
 ---
 
-# 🏆 PROJECT STATUS
+# 📌 PROJECT OVERVIEW
 
-### ✅ Day 1 — System Bootstrap
+AETHERION is a production-style microservice backend designed to:
 
-### ✅ Day 2 — Market Data Simulator
+• Ingest multi-market data in real time
+• Engineer features asynchronously
+• Detect market regimes using ML (HMM)
+• Persist regime transitions
+• Stream live updates via WebSockets
 
-### ✅ Day 3 — Feature Engineering Layer
-
-### ✅ Day 4 — HMM Regime Model Training
-
-### ✅ Day 5 — Live Regime Detection + WebSocket Broadcasting
-
-AETHERION backend now runs a fully asynchronous multi-market ingestion engine with live ML-based regime detection and WebSocket broadcasting.
+This README reflects the **actual Day-to-Day Implementation Plan (Day 1 → Day 5)** and the completed integration flow after each phase.
 
 ---
 
-# 🧱 FINALIZED TECH STACK
+# 🧱 FINAL TECH STACK (LOCKED)
 
-| Layer            | Technology      | Purpose                      |
-| ---------------- | --------------- | ---------------------------- |
-| Core Platform    | Django          | Auth, users, risk controls   |
-| Market Ingestion | FastAPI         | Async ingestion + WebSockets |
-| ML Engines       | Flask           | Regime detection             |
-| Databases        | MySQL + MongoDB | Structured + tick storage    |
-| Real-Time        | WebSockets      | Live streaming               |
-| Async            | asyncio         | Low-latency ingestion        |
+| Layer         | Technology      | Purpose                              |
+| ------------- | --------------- | ------------------------------------ |
+| Core Platform | Django          | Control layer, auth, risk, DB models |
+| Market Engine | FastAPI         | Async ingestion + WebSockets         |
+| ML Engine     | Flask           | Regime detection (HMM)               |
+| Databases     | MySQL + MongoDB | Structured + tick storage            |
+| Real-Time     | WebSockets      | Live streaming                       |
+| Async Runtime | asyncio         | Low latency processing               |
 
 ---
 
-# 🏗 SYSTEM ARCHITECTURE
+# 🏗 FINAL ARCHITECTURE
 
 ```
-Django Core (Port 8000)     → MySQL (3306)
-FastAPI Market (Port 8001)  → MongoDB (27017)
-Flask Regime (Port 8002)    → HMM Model Service
+Django Core (8000) → MySQL
+FastAPI Market (8001) → MongoDB
+Flask Regime ML (8002)
 
-FastAPI → Flask (REST ML inference)
-FastAPI → MySQL (Regime storage)
-FastAPI → WebSocket (Live streaming)
+FastAPI → Flask (ML inference)
+FastAPI → MySQL (Regime persistence)
+FastAPI → WebSocket (Live broadcast)
 ```
 
 ---
@@ -63,188 +61,167 @@ AETHERION_BACKEND/
 
 ---
 
-# ⚙️ ENVIRONMENT SETUP
-
-## 1️⃣ Create Virtual Environment
-
-```bash
-python -m venv venv
-venv\Scripts\activate
-```
-
-## 2️⃣ Install Dependencies
-
-```bash
-pip install -r requirements.txt
-```
+# 🗓 DAY‑TO‑DAY IMPLEMENTATION BREAKDOWN
 
 ---
 
-# 🗄 DATABASE CONFIGURATION
+# ✅ DAY 1 — SYSTEM BOOTSTRAP
 
-## 🟦 MySQL
+### Objectives
 
-### Create Databases
+• Setup microservice separation
+• Configure Django + MySQL
+• Configure FastAPI service
+• Configure Flask ML service
+• Establish database connectivity
 
-```sql
-CREATE DATABASE aetherion_core;
-CREATE DATABASE aetherion;
-```
+### Completed
 
-### Regime Table
+✔ Django running on `http://127.0.0.1:8000/`
+✔ FastAPI running on `http://127.0.0.1:8001/`
+✔ Flask ML service running on `http://127.0.0.1:8002/`
+✔ MySQL connected
+✔ MongoDB connected
 
-```sql
-CREATE TABLE regime_state (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    market VARCHAR(50) NOT NULL,
-    symbol VARCHAR(50) NOT NULL,
-    timeframe VARCHAR(10) NOT NULL,
-    regime VARCHAR(20) NOT NULL,
-    confidence FLOAT NOT NULL,
-    state INT NOT NULL,
-    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-```
-
-### Indexes
-
-```sql
-CREATE INDEX idx_market_symbol_time
-ON regime_state (market, symbol, detected_at);
-
-CREATE INDEX idx_regime
-ON regime_state (regime);
-```
+System foundation complete.
 
 ---
 
-## 🟩 MongoDB
+# ✅ DAY 2 — MARKET DATA SIMULATOR
 
-```
-mongodb://localhost:27017
-```
+### Objectives
 
-### Collections
+• Build async market generator
+• Generate random-walk price
+• Simulate volume
+• Store ticks in MongoDB
+• Broadcast via WebSocket
 
-```
-market_ticks
-market_candles
-market_features
-crypto_orderbook
-us_orderbook
-nse_orderbook
-```
+### Implemented
 
----
+✔ 1-second tick engine
+✔ MongoDB collection: `market_ticks`
+✔ OHLC aggregation (10s)
+✔ WebSocket stream
 
-# ▶ RUNNING THE SERVICES
-
-## 🟦 Django Core (Port 8000)
-
-```bash
-cd django_core
-python manage.py runserver 8000
-```
-
-Base URL:
-
-```
-http://127.0.0.1:8000/
-```
-
----
-
-## 🟩 FastAPI Market (Port 8001)
-
-```bash
-uvicorn fastapi_market.main:app --port 8001 --reload
-```
-
-### Swagger Docs
-
-```
-http://127.0.0.1:8001/docs
-```
-
-### OpenAPI JSON
-
-```
-http://127.0.0.1:8001/openapi.json
-```
-
----
-
-## 🟧 Flask Regime (Port 8002)
-
-```bash
-python -m flask_regime.app
-```
-
-Base URL:
-
-```
-http://127.0.0.1:8002/
-```
-
----
-
-# 🔄 INTER-SERVICE COMMUNICATION
-
-### FastAPI → Flask
-
-```
-POST http://127.0.0.1:8002/detect_regime
-```
-
-### Sample Response
-
-```json
-{
-  "market": "CRYPTO",
-  "symbol": "BTCUSDT",
-  "regime": "Bull",
-  "confidence": 0.87,
-  "state": 2
-}
-```
-
----
-
-# 📡 REST ENDPOINTS (FastAPI - Port 8001)
-
-```
-GET  http://127.0.0.1:8001/api/market/snapshot/{market}
-GET  http://127.0.0.1:8001/api/market/trades/{market}
-GET  http://127.0.0.1:8001/api/market/orderbook/{market}
-GET  http://127.0.0.1:8001/api/market/features/{market}
-GET  http://127.0.0.1:8001/api/market/status
-```
-
----
-
-# 🔌 WEBSOCKET ENDPOINTS
-
-## 🟢 Live Market Stream
+### WebSocket
 
 ```
 ws://127.0.0.1:8001/ws/market
 ```
 
-Streams:
+### Integration After Day 2
 
-* Tick data
-* OHLC candles
-* Volume updates
+Market data → MongoDB → WebSocket
+
+Live streaming operational.
 
 ---
 
-## 🟣 Live Regime Stream
+# ✅ DAY 3 — FEATURE ENGINE
+
+### Objectives
+
+• Compute rolling features
+• Store features in MongoDB
+• Maintain async processing loop
+
+### Implemented Features
+
+• Log returns
+• Rolling volatility
+• ATR
+• Volume delta
+• Spread estimation
+
+### Storage
+
+MongoDB collection:
+
+```
+market_features
+```
+
+### Integration After Day 3
+
+Market Data → Feature Engine → MongoDB → WebSocket
+
+Feature layer fully integrated.
+
+---
+
+# ✅ DAY 4 — HMM REGIME MODEL TRAINING
+
+### Objectives
+
+• Train Gaussian Hidden Markov Model
+• Scale features
+• Map hidden states to market regimes
+• Persist model artifacts
+
+### Model Design
+
+• 4 Hidden States
+• Bull
+• Bear
+• Sideways
+• Crisis
+
+### Saved Artifacts
+
+```
+crypto_1m_hmm.pkl
+crypto_1m_scaler.pkl
+crypto_1m_mapping.pkl
+```
+
+### Flask ML Endpoint
+
+```
+POST http://127.0.0.1:8002/detect_regime
+```
+
+### Integration After Day 4
+
+Feature Engine → Flask ML → Regime Prediction
+
+ML inference service operational.
+
+---
+
+# ✅ DAY 5 — LIVE REGIME ENGINE + PERSISTENCE
+
+### Objectives
+
+• Poll Flask every 10 seconds
+• Apply confidence filter
+• Insert only on regime change
+• Store regime history in MySQL
+• Broadcast regime updates
+
+### MySQL Table
+
+```
+regime_state
+```
+
+Fields:
+
+• market
+• symbol
+• timeframe
+• regime
+• confidence
+• state
+• detected_at
+
+### WebSocket
 
 ```
 ws://127.0.0.1:8001/ws/regime
 ```
 
-Example Payload:
+### Example Payload
 
 ```json
 {
@@ -257,111 +234,85 @@ Example Payload:
 }
 ```
 
----
+### Integration After Day 5
 
-# 📊 DAY 2 — MARKET SIMULATOR (COMPLETE)
-
-* Random-walk price generator
-* Volume simulation
-* 1-second tick interval
-* MongoDB persistence
-* 10-second OHLC aggregation
-* WebSocket streaming
-
----
-
-# 🧠 DAY 3 — FEATURE ENGINE (COMPLETE)
-
-Computed in real time:
-
-* Log returns
-* Rolling volatility
-* ATR
-* Volume delta
-* Spread estimation
-
-Stored in:
-
-```
-market_features
-```
-
----
-
-# 🤖 DAY 4 — HMM REGIME MODEL (COMPLETE)
-
-* Gaussian Hidden Markov Model
-* 4 States → Bull / Bear / Sideways / Crisis
-* Feature scaling (StandardScaler)
-* Automatic state mapping
-* Model persistence (joblib)
-
-Saved Artifacts:
-
-```
-crypto_1m_hmm.pkl
-crypto_1m_scaler.pkl
-crypto_1m_mapping.pkl
-```
-
----
-
-# 🚀 DAY 5 — LIVE REGIME ENGINE (COMPLETE)
-
-## Polling System
-
-FastAPI polls Flask every 10 seconds:
-
-* Applies confidence threshold
-* Inserts only on regime change
-* Stores in MySQL
-* Broadcasts via WebSocket
-
----
-
-# 🔁 REAL-TIME FLOW
-
-```
 Market Data
-   ↓
-Feature Engineering
-   ↓
-HMM Regime Detection
-   ↓
-Confidence Filter
-   ↓
-MySQL Persistence
-   ↓
-WebSocket Broadcast
+→ Feature Engine
+→ HMM Regime Detection
+→ Confidence Filter
+→ MySQL Persistence
+→ WebSocket Broadcast
+
+Full ML-driven real-time regime system operational.
+
+---
+
+# 📡 FASTAPI REST ENDPOINTS
+
+```
+GET  http://127.0.0.1:8001/api/market/snapshot/{market}
+GET  http://127.0.0.1:8001/api/market/trades/{market}
+GET  http://127.0.0.1:8001/api/market/orderbook/{market}
+GET  http://127.0.0.1:8001/api/market/features/{market}
+GET  http://127.0.0.1:8001/api/market/status
+```
+
+Swagger Docs:
+
+```
+http://127.0.0.1:8001/docs
 ```
 
 ---
 
-# 🏆 WHAT HAS BEEN ACHIEVED
+# ▶ RUNNING THE SERVICES
 
-✔ Microservice backend separation
+## Django Core
+
+```
+cd django_core
+python manage.py runserver 8000
+```
+
+## FastAPI Market
+
+```
+uvicorn fastapi_market.main:app --port 8001 --reload
+```
+
+## Flask Regime ML
+
+```
+python -m flask_regime.app
+```
+
+---
+
+# 🏆 CURRENT SYSTEM CAPABILITIES
+
+✔ Microservice separation
 ✔ Async multi-market ingestion
-✔ Mongo feature engineering layer
-✔ HMM-based regime classification
+✔ Real-time feature engineering
+✔ ML-based regime classification
 ✔ Confidence-filtered regime transitions
-✔ MySQL historical regime storage
-✔ WebSocket real-time regime streaming
+✔ MySQL regime history
+✔ Live WebSocket broadcasting
 ✔ Production-style polling architecture
 
 ---
 
-# 🔮 NEXT PHASE
+# 🚀 NEXT IMPLEMENTATION PHASE
 
-* Strategy Switching Engine
-* Liquidity Stress Simulator
-* Portfolio Risk Engine
-* Trade Surveillance System
+Following completion of Regime Detection:
+
+• Strategy Switching Engine
+• Risk Layer Integration
+• Execution Engine
+• Surveillance System
 
 ---
 
-# 🧠 CURRENT SYSTEM STATE
-
-AETHERION Backend
+# 📌 PROJECT STATE
 
 Day 1: COMPLETE
 Day 2: COMPLETE
@@ -369,4 +320,4 @@ Day 3: COMPLETE
 Day 4: COMPLETE
 Day 5: COMPLETE
 
-Live multi-market ingestion + ML regime detection operational.
+AETHERION backend is fully operational with live ML regime detection.
