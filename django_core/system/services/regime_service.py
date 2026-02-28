@@ -1,6 +1,7 @@
 # system/services/regime_service.py
 
 import requests
+from .broadcast_service import BroadcastService
 
 
 FLASK_REGIME_URL = "http://127.0.0.1:5001/detect_regime"
@@ -8,10 +9,13 @@ FLASK_REGIME_URL = "http://127.0.0.1:5001/detect_regime"
 
 class RegimeService:
 
+    _last_broadcasted_regime = None  # In-memory state tracking
+
     @staticmethod
     def get_current_regime(market: str, symbol: str):
         """
         Calls Flask regime detection service and returns regime data.
+        Automatically broadcasts regime updates if changed.
         """
 
         if not market or not symbol:
@@ -35,7 +39,19 @@ class RegimeService:
                     "details": response.json()
                 }, response.status_code
 
-            return response.json(), 200
+            regime_data = response.json()
+
+            # 🔹 Broadcast only if regime changed
+            if regime_data != RegimeService._last_broadcasted_regime:
+                print("🔥 BROADCAST TRIGGERED")
+                BroadcastService.send(
+                    channel="regime",
+                    data=regime_data
+                )
+
+                RegimeService._last_broadcasted_regime = regime_data
+
+            return regime_data, 200
 
         except requests.exceptions.RequestException as e:
             return {

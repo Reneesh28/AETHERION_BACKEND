@@ -51,7 +51,7 @@ if __name__ == "__main__":
         )
     )
 
-    print("Starting Flask Regime Engine on 8002...")
+    print("Starting Flask Regime Engine on 5001...")
     processes.append(
         start_service(
             [python_executable, "app.py"],

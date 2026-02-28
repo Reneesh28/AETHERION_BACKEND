@@ -13,7 +13,7 @@ from system.services.market_service import MarketService
 
 import requests
 
-FASTAPI_BASE = "http://127.0.0.1:8001"
+FASTAPI_BASE = "http://127.0.0.1:8000"
 
 def health(request):
     return JsonResponse({"status": "django_core running"})
