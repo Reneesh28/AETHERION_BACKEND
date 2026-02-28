@@ -7,12 +7,13 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from system.models import TradeExecution
 from system.serializers import TradeExecutionSerializer
-
-
+from system.services.regime_service import RegimeService
+from system.services.strategy_service import StrategyService
+from system.services.market_service import MarketService
 
 import requests
 
-FASTAPI_BASE = "http://127.0.0.1:8000"
+FASTAPI_BASE = "http://127.0.0.1:8001"
 
 def health(request):
     return JsonResponse({"status": "django_core running"})
@@ -144,3 +145,22 @@ def risk_dashboard(request):
         "risk_per_trade_amount": risk_per_trade,
     })
 
+@api_view(["GET"])
+def get_current_regime(request):
+    market = request.query_params.get("market")
+    symbol = request.query_params.get("symbol")
+
+    data, status_code = RegimeService.get_current_regime(market, symbol)
+
+    return Response(data, status=status_code)
+
+@api_view(["GET"])
+def get_current_strategy(request):
+    data, status_code = StrategyService.get_current_strategy()
+    return Response(data, status=status_code)
+
+@api_view(["GET"])
+def get_market_snapshot(request):
+    market = request.query_params.get("market")
+    data, status_code = MarketService.get_market_snapshot(market)
+    return Response(data, status=status_code)

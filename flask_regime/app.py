@@ -70,6 +70,10 @@ def detect_regime():
     if not market or not symbol:
         return jsonify({"error": "Missing parameters"}), 400
 
+    # 🔥 FIX: Normalize input to match DB format
+    market = market.strip().upper()
+    symbol = symbol.strip().upper()
+
     results = {}
 
     for timeframe in TIMEFRAMES:
