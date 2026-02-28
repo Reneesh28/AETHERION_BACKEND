@@ -36,4 +36,3 @@ class ExecutionService:
             strategy="AUTO",        # No strategy logic touched
             )
         return portfolio_result
-
