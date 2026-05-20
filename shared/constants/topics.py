@@ -11,7 +11,9 @@ MARKET_ORDERBOOK_RAW_TOPIC = "market.orderbook.raw"
 # FEATURE TOPICS
 # =========================
 
-FEATURE_VECTOR_TOPIC = "feature.vector.computed"
+FEATURE_VECTOR_COMPUTED_TOPIC = "feature.vector.computed"
+
+FEATURE_VECTOR_TOPIC = FEATURE_VECTOR_COMPUTED_TOPIC
 
 
 # =========================

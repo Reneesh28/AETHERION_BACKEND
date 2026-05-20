@@ -164,6 +164,9 @@ services:
 
     container_name: feature_service
 
+    env_file:
+      - envs/feature.env
+
     depends_on:
       - kafka
       - redis
